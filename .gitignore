@@ -1,13 +1,62 @@
+# AlphaPilot - Python / Secrets
+
+# API keys and environment
 .env
 .env.*
+.envrc
+
+# Virtual environments
 venv/
 .venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Python cache
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+
+# Logs
 *.log
+logs/
+
+# IDE
 .vscode/
 .idea/
+
+# OS files
 .DS_Store
 Thumbs.db
-logs/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+# Build / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+*.egg
+*.manifest
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Temporary
+tempCodeRunnerFile.py
+
+# PyInstaller
+*.spec
