@@ -1,0 +1,93 @@
+[1mdiff --git a/options/risk_manager.py b/options/risk_manager.py[m
+[1mindex b0657dd..7c115e8 100644[m
+[1m--- a/options/risk_manager.py[m
+[1m+++ b/options/risk_manager.py[m
+[36m@@ -4,17 +4,12 @@[m
+ [m
+ ACCOUNT_SIZE = 100_000[m
+ [m
+[31m-# Maximum percentage of account we are willing[m
+[31m-# to risk on a single trade.[m
+ MAX_RISK_PERCENT = 1.0[m
+ [m
+[31m-# Maximum total capital allocated to one trade.[m
+ MAX_POSITION_PERCENT = 5.0[m
+ [m
+[31m-# Stop loss on option premium.[m
+ STOP_LOSS_PERCENT = 30.0[m
+ [m
+[31m-# Take profit on option premium.[m
+ TAKE_PROFIT_PERCENT = 60.0[m
+ [m
+ [m
+[36m@@ -56,9 +51,6 @@[m [mdef calculate_max_position_value([m
+ [m
+ def calculate_contract_cost(option_price):[m
+ [m
+[31m-    # One US options contract normally represents[m
+[31m-    # 100 shares.[m
+[31m-[m
+     return option_price * 100[m
+ [m
+ [m
+[36m@@ -86,17 +78,14 @@[m [mdef calculate_contract_quantity([m
+         account_size[m
+     )[m
+ [m
+[31m-    # Maximum number based on risk[m
+     quantity_by_risk = int([m
+         max_risk / contract_cost[m
+     )[m
+ [m
+[31m-    # Maximum number based on total position size[m
+     quantity_by_position = int([m
+         max_position / contract_cost[m
+     )[m
+ [m
+[31m-    # Use the more conservative limit[m
+     quantity = min([m
+         quantity_by_risk,[m
+         quantity_by_position[m
+[36m@@ -194,8 +183,6 @@[m [mdef risk_gate([m
+         option_price[m
+     )[m
+ [m
+[31m-    # Approximate loss if premium falls[m
+[31m-    # to stop-loss level.[m
+     loss_per_contract = ([m
+         option_price - stop_loss[m
+     ) * 100[m
+[36m@@ -269,20 +256,19 @@[m [mdef risk_gate([m
+ if __name__ == "__main__":[m
+ [m
+     print("=" * 65)[m
+[31m-    print("             ALPHAPILOT AI RISK MANAGER")[m
+[32m+[m[32m    print("ALPHAPILOT AI RISK MANAGER")[m
+     print("=" * 65)[m
+ [m
+     account_size = 100_000[m
+ [m
+[31m-    # Example premium[m
+     option_price = 2.53[m
+ [m
+     print([m
+[31m-        f"\nAccount Size       : ${account_size:,.2f}"[m
+[32m+[m[32m        f"\nAccount Size : ${account_size:,.2f}"[m
+     )[m
+ [m
+     print([m
+[31m-        f"Option Premium     : ${option_price:.2f}"[m
+[32m+[m[32m        f"Option Premium : ${option_price:.2f}"[m
+     )[m
+ [m
+     max_risk = calculate_max_risk([m
+[36m@@ -366,7 +352,7 @@[m [mif __name__ == "__main__":[m
+         )[m
+ [m
+     print("\n" + "=" * 65)[m
+[31m-    print("             RISK ANALYSIS COMPLETE")[m
+[32m+[m[32m    print("RISK ANALYSIS COMPLETE")[m
+     print("=" * 65)[m
+ [m
+     print("\nNO ORDER WAS PLACED.")[m
+\ No newline at end of file[m
