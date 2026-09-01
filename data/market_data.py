@@ -11,7 +11,6 @@ load_dotenv()
 API_KEY = os.getenv("ALPACA_API_KEY")
 SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 
-# Connect to Alpaca Market Data
 data_client = StockHistoricalDataClient(
     API_KEY,
     SECRET_KEY
@@ -28,7 +27,7 @@ request = StockBarsRequest(
 bars = data_client.get_stock_bars(request)
 
 print("=" * 55)
-print("        ALPHAPILOT MARKET DATA SCANNER")
+print("ALPHAPILOT MARKET DATA SCANNER")
 print("=" * 55)
 
 for symbol in symbols:
@@ -50,5 +49,5 @@ for symbol in symbols:
         print("Error:", e)
 
 print("\n" + "=" * 55)
-print("        MARKET DATA TEST COMPLETE")
+print("MARKET DATA TEST COMPLETE")
 print("=" * 55)

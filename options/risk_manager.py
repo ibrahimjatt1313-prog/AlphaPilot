@@ -4,17 +4,12 @@
 
 ACCOUNT_SIZE = 100_000
 
-# Maximum percentage of account we are willing
-# to risk on a single trade.
 MAX_RISK_PERCENT = 1.0
 
-# Maximum total capital allocated to one trade.
 MAX_POSITION_PERCENT = 5.0
 
-# Stop loss on option premium.
 STOP_LOSS_PERCENT = 30.0
 
-# Take profit on option premium.
 TAKE_PROFIT_PERCENT = 60.0
 
 
@@ -56,9 +51,6 @@ def calculate_max_position_value(
 
 def calculate_contract_cost(option_price):
 
-    # One US options contract normally represents
-    # 100 shares.
-
     return option_price * 100
 
 
@@ -86,17 +78,14 @@ def calculate_contract_quantity(
         account_size
     )
 
-    # Maximum number based on risk
     quantity_by_risk = int(
         max_risk / contract_cost
     )
 
-    # Maximum number based on total position size
     quantity_by_position = int(
         max_position / contract_cost
     )
 
-    # Use the more conservative limit
     quantity = min(
         quantity_by_risk,
         quantity_by_position
@@ -194,8 +183,6 @@ def risk_gate(
         option_price
     )
 
-    # Approximate loss if premium falls
-    # to stop-loss level.
     loss_per_contract = (
         option_price - stop_loss
     ) * 100
@@ -269,20 +256,19 @@ def risk_gate(
 if __name__ == "__main__":
 
     print("=" * 65)
-    print("             ALPHAPILOT AI RISK MANAGER")
+    print("ALPHAPILOT AI RISK MANAGER")
     print("=" * 65)
 
     account_size = 100_000
 
-    # Example premium
     option_price = 2.53
 
     print(
-        f"\nAccount Size       : ${account_size:,.2f}"
+        f"\nAccount Size : ${account_size:,.2f}"
     )
 
     print(
-        f"Option Premium     : ${option_price:.2f}"
+        f"Option Premium : ${option_price:.2f}"
     )
 
     max_risk = calculate_max_risk(
@@ -366,7 +352,7 @@ if __name__ == "__main__":
         )
 
     print("\n" + "=" * 65)
-    print("             RISK ANALYSIS COMPLETE")
+    print("RISK ANALYSIS COMPLETE")
     print("=" * 65)
 
     print("\nNO ORDER WAS PLACED.")

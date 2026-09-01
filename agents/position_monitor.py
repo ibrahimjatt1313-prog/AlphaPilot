@@ -49,8 +49,8 @@ option_client = OptionHistoricalDataClient(
 CHECK_INTERVAL = 10
 
 # Risk management
-STOP_LOSS_PERCENT = 63.5
-TAKE_PROFIT_PERCENT = 60.3
+STOP_LOSS_PERCENT = 30.0
+TAKE_PROFIT_PERCENT = 60.0
 
 AUTO_EXIT = True
 

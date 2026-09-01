@@ -39,7 +39,6 @@ OPTION_SYMBOL = "SPY260904C00772000"
 
 QUANTITY = 3
 
-# Use the current best ask from your selector.
 LIMIT_PRICE = 4.85
 
 MAX_TRADE_COST = 5000.00
@@ -50,7 +49,7 @@ MAX_TRADE_COST = 5000.00
 # ============================================================
 
 print("=" * 70)
-print("              ALPHAPILOT AI EXECUTION ENGINE")
+print("ALPHAPILOT AI EXECUTION ENGINE")
 print("=" * 70)
 
 print("\nExecution Mode : PAPER TRADING")
@@ -116,8 +115,6 @@ if LIMIT_PRICE <= 0:
 # OPTIONS COST
 # ============================================================
 
-# One option contract normally represents 100 shares.
-
 estimated_cost = (
     LIMIT_PRICE
     * 100
@@ -152,7 +149,7 @@ if estimated_cost > MAX_TRADE_COST:
 # ============================================================
 
 print("\n" + "-" * 70)
-print("                    FINAL RISK GATE")
+print("FINAL RISK GATE")
 print("-" * 70)
 
 print("Account       : PAPER")
@@ -186,7 +183,7 @@ try:
     )
 
     print("\n" + "=" * 70)
-    print("                 ORDER SUBMITTED")
+    print("ORDER SUBMITTED")
     print("=" * 70)
 
     print("Order ID :", order.id)
@@ -200,7 +197,7 @@ try:
 except Exception as e:
 
     print("\n" + "=" * 70)
-    print("                  ORDER FAILED")
+    print("ORDER FAILED")
     print("=" * 70)
 
     print(e)
@@ -211,5 +208,5 @@ except Exception as e:
 # ============================================================
 
 print("\n" + "=" * 70)
-print("             EXECUTION ENGINE COMPLETE")
+print("EXECUTION ENGINE COMPLETE")
 print("=" * 70)

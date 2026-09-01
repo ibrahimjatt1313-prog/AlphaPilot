@@ -54,9 +54,6 @@ MAX_DELTA = 0.70
 MAX_SPREAD_PERCENT = 10.0
 
 TOP_CANDIDATES = 10
-
-# Prefer options that are reasonably close to expiry,
-# but avoid extremely short-dated contracts.
 MIN_DTE = 2
 MAX_DTE = 21
 
@@ -115,13 +112,6 @@ def calculate_spread_percent(bid, ask):
 
 def get_option_type(symbol):
 
-    # OCC option format:
-    #
-    # SPY260831C00772000
-    #          ^
-    #          C = Call
-    #          P = Put
-
     if len(symbol) < 10:
         return "UNKNOWN"
 
@@ -160,12 +150,6 @@ def get_strike(symbol):
 def get_expiration(symbol):
 
     try:
-
-        # OCC format:
-        #
-        # SPY260831C00772000
-        #     260831
-        #     YYMMDD
 
         date_part = symbol[-15:-9]
 
@@ -226,11 +210,6 @@ def calculate_strike_score(
     ) / underlying_price
 
     distance_percent = distance * 100
-
-    # 0% distance = 100 score
-    #
-    # Score gradually decreases as strike
-    # moves away from underlying price.
 
     score = 100 - (
         distance_percent * 20
@@ -333,8 +312,6 @@ def calculate_dte_score(dte):
 
     if dte is None:
         return 50
-
-    # Prefer roughly 7-14 DTE for this strategy.
 
     if 7 <= dte <= 14:
         return 100
@@ -622,7 +599,7 @@ def select_contracts(
 if __name__ == "__main__":
 
     print("=" * 70)
-    print("             ALPHAPILOT SMART OPTIONS SELECTOR")
+    print("ALPHAPILOT SMART OPTIONS SELECTOR")
     print("=" * 70)
 
     print(
@@ -718,7 +695,7 @@ if __name__ == "__main__":
     )
 
     print(
-        "                TOP OPTION CANDIDATES"
+        "TOP OPTION CANDIDATES"
     )
 
     print(
@@ -803,7 +780,7 @@ if __name__ == "__main__":
     )
 
     print(
-        "          SMART OPTIONS SELECTION COMPLETE"
+        "SMART OPTIONS SELECTION COMPLETE"
     )
 
     print(

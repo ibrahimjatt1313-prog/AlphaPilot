@@ -36,7 +36,7 @@ options_client = OptionHistoricalDataClient(
 symbol = "SPY"
 
 print("=" * 65)
-print("          ALPHAPILOT OPTIONS SCANNER")
+print("ALPHAPILOT OPTIONS SCANNER")
 print("=" * 65)
 
 print(f"\nUnderlying: {symbol}")
@@ -54,7 +54,6 @@ try:
     print("Options chain received successfully!")
     print("Number of contracts:", len(chain))
 
-    # Show first 10 contracts
     count = 0
 
     for contract_symbol, snapshot in chain.items():
@@ -102,5 +101,5 @@ except Exception as e:
 
 
 print("\n" + "=" * 65)
-print("          OPTIONS SCAN COMPLETE")
+print("OPTIONS SCAN COMPLETE")
 print("=" * 65)
