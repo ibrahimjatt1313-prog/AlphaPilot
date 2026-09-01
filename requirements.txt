@@ -2,3 +2,4 @@ alpaca-py
 python-dotenv
 pandas
 streamlit
+plotly
