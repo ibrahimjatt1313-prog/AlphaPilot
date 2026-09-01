@@ -1,26 +1,41 @@
+
+# ============================================================
+# AlphaPilot AI - Professional Paper Trading Dashboard
+# ============================================================
+# Real Alpaca paper-account data
+# No fake performance data
+# No fake trades
+# No live-money execution
+# ============================================================
+
 import os
 from pathlib import Path
+from datetime import datetime
 
 import pandas as pd
 import streamlit as st
-import plotly.express as px
 from dotenv import load_dotenv
+
+
+# ============================================================
+# OPTIONAL ALPACA IMPORT
+# ============================================================
 
 try:
     from alpaca.trading.client import TradingClient
+    from alpaca.trading.enums import QueryOrderStatus
 except Exception:
     TradingClient = None
+    QueryOrderStatus = None
 
 
 # ============================================================
-# ALPHAPILOT AI — SIMPLE PROFESSIONAL DASHBOARD
+# PAGE CONFIG
 # ============================================================
-
-load_dotenv()
 
 st.set_page_config(
     page_title="AlphaPilot AI",
-    page_icon="🚀",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -37,332 +52,203 @@ TRADE_LOG = BASE_DIR / "logs" / "trades.csv"
 
 
 # ============================================================
-# CSS
+# ENVIRONMENT
+# ============================================================
+
+load_dotenv(BASE_DIR / ".env")
+
+
+# ============================================================
+# CUSTOM CSS
 # ============================================================
 
 st.markdown(
     """
     <style>
 
-    /* =========================
-       MAIN APP
-       ========================= */
+    /* ======================================================
+       GLOBAL
+       ====================================================== */
 
     .stApp {
-        background: #0b1220;
-        color: #f8fafc;
+        background-color: #0b1120;
     }
 
-    .main .block-container {
-        max-width: 1450px;
-        padding-top: 2rem;
-        padding-bottom: 3rem;
+    .block-container {
+        padding-top: 1.5rem;
+        padding-bottom: 2rem;
+        max-width: 1500px;
+    }
+
+    p, label, span {
+        color: #cbd5e1;
+    }
+
+    h1, h2, h3 {
+        color: #f8fafc !important;
+    }
+
+    hr {
+        border-color: #1e293b;
     }
 
 
-    /* =========================
+    /* ======================================================
        SIDEBAR
-       ========================= */
+       ====================================================== */
 
     section[data-testid="stSidebar"] {
-        background: #111827 !important;
-        border-right: 1px solid #263244 !important;
-    }
-
-    section[data-testid="stSidebar"] * {
-        color: #f1f5f9 !important;
-    }
-
-    section[data-testid="stSidebar"] p,
-    section[data-testid="stSidebar"] span,
-    section[data-testid="stSidebar"] label {
-        color: #e2e8f0 !important;
+        background-color: #0f172a;
+        border-right: 1px solid #1e293b;
     }
 
     section[data-testid="stSidebar"] h1,
     section[data-testid="stSidebar"] h2,
     section[data-testid="stSidebar"] h3 {
-        color: #ffffff !important;
-        font-weight: 800 !important;
-    }
-
-    section[data-testid="stSidebar"] hr {
-        border-color: #334155 !important;
-    }
-
-    /* Sidebar success box */
-    section[data-testid="stSidebar"] div[data-testid="stAlert"] {
-        background: #10251d !important;
-        border: 1px solid #1f6047 !important;
-    }
-
-    section[data-testid="stSidebar"] div[data-testid="stAlert"] * {
-        color: #6ee7b7 !important;
+        color: #f8fafc;
     }
 
 
-    /* =========================
-       HEADER
-       ========================= */
-
-    .header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 30px;
-    }
-
-    .brand {
-        font-size: 38px;
-        font-weight: 800;
-        color: #ffffff !important;
-        letter-spacing: -1px;
-    }
-
-    .brand-accent {
-        color: #60a5fa !important;
-    }
-
-    .tagline {
-        margin-top: 5px;
-        color: #cbd5e1 !important;
-        font-size: 14px;
-    }
-
-    .online {
-        background: #10251d;
-        border: 1px solid #1f6047;
-        color: #6ee7b7 !important;
-        padding: 8px 14px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: 700;
-    }
-
-
-    /* =========================
-       SECTION TITLES
-       ========================= */
-
-    .section-title {
-        color: #ffffff !important;
-        font-size: 22px;
-        font-weight: 800;
-        margin-top: 25px;
-        margin-bottom: 4px;
-    }
-
-    .section-subtitle {
-        color: #94a3b8 !important;
-        font-size: 13px;
-        margin-bottom: 16px;
-    }
-
-
-    /* =========================
+    /* ======================================================
        METRIC CARDS
-       ========================= */
+       ====================================================== */
 
-    .metric-card {
-        background: #111827;
-        border: 1px solid #263244;
-        border-radius: 12px;
-        padding: 20px;
-        min-height: 125px;
+    div[data-testid="stMetric"] {
+        background-color: #111827;
+        border: 1px solid #1e293b;
+        border-radius: 14px;
+        padding: 16px;
+        min-height: 105px;
     }
 
-    .metric-label {
+    div[data-testid="stMetricLabel"] {
         color: #94a3b8 !important;
-        font-size: 12px;
+    }
+
+    div[data-testid="stMetricValue"] {
+        color: #f8fafc !important;
         font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: .5px;
     }
 
-    .metric-value {
-        color: #ffffff !important;
-        font-size: 28px;
-        font-weight: 800;
-        margin-top: 8px;
-    }
-
-    .metric-sub {
-        color: #64748b !important;
-        font-size: 12px;
-        margin-top: 5px;
+    div[data-testid="stMetricDelta"] {
+        font-weight: 600;
     }
 
 
-    /* =========================
-       PIPELINE
-       ========================= */
+    /* ======================================================
+       EXPANDERS
+       ====================================================== */
 
-    .pipeline-box {
-        background: #111827;
-        border: 1px solid #263244;
+    div[data-testid="stExpander"] {
+        border: 1px solid #1e293b;
         border-radius: 12px;
-        padding: 18px;
-        overflow-x: auto;
-    }
-
-    .pipeline {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        min-width: 900px;
-    }
-
-    .pipeline-step {
-        background: #172033;
-        border: 1px solid #334155;
-        color: #e2e8f0 !important;
-        border-radius: 9px;
-        padding: 12px 14px;
-        min-width: 120px;
-        text-align: center;
-        font-size: 12px;
-        font-weight: 700;
-        line-height: 1.5;
-    }
-
-    .pipeline-arrow {
-        color: #64748b !important;
-        font-size: 18px;
+        background-color: #0f172a;
     }
 
 
-    /* =========================
-       STATUS CARDS
-       ========================= */
-
-    .status-card {
-        background: #111827;
-        border: 1px solid #263244;
-        border-radius: 12px;
-        padding: 20px;
-        min-height: 180px;
-    }
-
-    .status-title {
-        color: #ffffff !important;
-        font-size: 15px;
-        font-weight: 800;
-        margin-bottom: 14px;
-    }
-
-    .status-text {
-        color: #cbd5e1 !important;
-        font-size: 13px;
-        line-height: 1.8;
-    }
-
-    .blue {
-        color: #60a5fa !important;
-        font-weight: 800;
-    }
-
-    .green {
-        color: #34d399 !important;
-        font-weight: 800;
-    }
-
-    .yellow {
-        color: #fbbf24 !important;
-        font-weight: 800;
-    }
-
-
-    /* =========================
-       EMPTY POSITION
-       ========================= */
-
-    .empty-position {
-        background: #111827;
-        border: 1px dashed #475569;
-        border-radius: 12px;
-        padding: 35px;
-        text-align: center;
-    }
-
-    .empty-title {
-        color: #ffffff !important;
-        font-size: 17px;
-        font-weight: 800;
-    }
-
-    .empty-text {
-        color: #94a3b8 !important;
-        font-size: 13px;
-        margin-top: 6px;
-    }
-
-
-    /* =========================
-       BUTTON
-       ========================= */
+    /* ======================================================
+       BUTTONS
+       ====================================================== */
 
     .stButton > button {
         width: 100%;
-        background: #172033 !important;
-        color: #ffffff !important;
-        border: 1px solid #334155 !important;
         border-radius: 8px;
-        font-weight: 700;
-    }
-
-    .stButton > button:hover {
-        border-color: #60a5fa !important;
-        color: #60a5fa !important;
-    }
-
-
-    /* =========================
-       DATAFRAME
-       ========================= */
-
-    [data-testid="stDataFrame"] {
-        border: 1px solid #263244;
-        border-radius: 10px;
-        overflow: hidden;
-    }
-
-
-    /* =========================
-       STREAMLIT TEXT
-       ========================= */
-
-    .stMarkdown,
-    .stText,
-    p {
+        border: 1px solid #334155;
+        background-color: #111827;
         color: #e2e8f0;
     }
 
+    .stButton > button:hover {
+        border-color: #64748b;
+        color: #ffffff;
+    }
 
-    /* =========================
+
+    /* ======================================================
+       TABLE
+       ====================================================== */
+
+    div[data-testid="stDataFrame"] {
+        border-radius: 10px;
+    }
+
+
+    /* ======================================================
+       STATUS BOXES
+       ====================================================== */
+
+    div[data-testid="stAlert"] {
+        border-radius: 10px;
+    }
+
+
+    /* ======================================================
+       PIPELINE CARDS
+       ====================================================== */
+
+    .pipeline-card {
+        background-color: #111827;
+        border: 1px solid #1e293b;
+        border-radius: 12px;
+        padding: 14px;
+        text-align: center;
+        min-height: 115px;
+    }
+
+    .pipeline-number {
+        font-size: 13px;
+        color: #64748b;
+        font-weight: 700;
+    }
+
+    .pipeline-icon {
+        font-size: 28px;
+        margin-top: 4px;
+    }
+
+    .pipeline-title {
+        color: #f8fafc;
+        font-size: 14px;
+        font-weight: 700;
+        margin-top: 5px;
+    }
+
+
+    /* ======================================================
+       INFO CARDS
+       ====================================================== */
+
+    .info-card {
+        background-color: #111827;
+        border: 1px solid #1e293b;
+        border-radius: 12px;
+        padding: 18px;
+        min-height: 130px;
+    }
+
+    .info-title {
+        color: #f8fafc;
+        font-size: 17px;
+        font-weight: 700;
+        margin-bottom: 8px;
+    }
+
+    .info-text {
+        color: #94a3b8;
+        font-size: 14px;
+        line-height: 1.6;
+    }
+
+
+    /* ======================================================
        FOOTER
-       ========================= */
+       ====================================================== */
 
     .footer {
-        border-top: 1px solid #263244;
-        margin-top: 35px;
-        padding-top: 20px;
         text-align: center;
-        color: #64748b !important;
-        font-size: 12px;
-        line-height: 1.8;
-    }
-
-
-    /* =========================
-       HIDE DEFAULT MENU
-       ========================= */
-
-    #MainMenu {
-        visibility: hidden;
-    }
-
-    footer {
-        visibility: hidden;
+        color: #64748b;
+        font-size: 13px;
+        padding: 15px 0;
     }
 
     </style>
@@ -372,222 +258,112 @@ st.markdown(
 
 
 # ============================================================
-# HEADER
+# HELPERS
 # ============================================================
 
-header_left, header_right = st.columns([7, 2])
-
-with header_left:
-
-    st.markdown(
-        """
-        <div class="brand">
-            🚀 <span class="brand-accent">AlphaPilot</span> AI
-        </div>
-
-        <div class="tagline">
-            AI-Powered Paper Trading & Options Monitoring System
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-with header_right:
-
-    st.markdown(
-        """
-        <div style="text-align:right; margin-top:10px;">
-            <span class="online">
-                ● PAPER SYSTEM ONLINE
-            </span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-with st.sidebar:
-
-    st.markdown(
-        """
-        <div style="
-            font-size:25px;
-            font-weight:800;
-            color:#ffffff;
-            margin-bottom:3px;
-        ">
-            🚀 AlphaPilot AI
-        </div>
-
-        <div style="
-            color:#cbd5e1;
-            font-size:12px;
-            margin-bottom:20px;
-        ">
-            Trading Control Center
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("---")
-
-    st.markdown("### 🟢 System Status")
-
-    st.success("SYSTEM ONLINE")
-
-    st.markdown(
-        """
-        <div style="
-            background:#172033;
-            border:1px solid #334155;
-            border-radius:9px;
-            padding:13px;
-            margin-top:10px;
-            margin-bottom:20px;
-        ">
-
-            <div style="
-                color:#94a3b8;
-                font-size:11px;
-                text-transform:uppercase;
-                font-weight:700;
-            ">
-                Trading Environment
-            </div>
-
-            <div style="
-                color:#ffffff;
-                font-size:14px;
-                font-weight:800;
-                margin-top:6px;
-            ">
-                🧪 PAPER TRADING
-            </div>
-
-            <div style="
-                color:#94a3b8;
-                font-size:11px;
-                margin-top:5px;
-            ">
-                No real money is being used.
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("### 🔄 Trading Pipeline")
-
-    st.markdown(
-        """
-        <div style="
-            color:#e2e8f0;
-            font-size:13px;
-            line-height:2.2;
-        ">
-
-        <b style="color:#60a5fa;">01</b>
-        📊 Market Analysis
-
-        <br>
-
-        <b style="color:#60a5fa;">02</b>
-        🤖 AI Signal
-
-        <br>
-
-        <b style="color:#60a5fa;">03</b>
-        ⚙️ Options Selection
-
-        <br>
-
-        <b style="color:#60a5fa;">04</b>
-        🛡️ Risk Checks
-
-        <br>
-
-        <b style="color:#60a5fa;">05</b>
-        💹 Paper Entry
-
-        <br>
-
-        <b style="color:#60a5fa;">06</b>
-        👁️ Position Monitoring
-
-        <br>
-
-        <b style="color:#60a5fa;">07</b>
-        🚪 Exit
-
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("---")
-
-    if st.button("🔄 Refresh Dashboard"):
-        st.rerun()
-
-    st.markdown("---")
-
-    st.caption("AlphaPilot AI v1.0")
-    st.caption("Paper Trading Environment")
-
-
-# ============================================================
-# CSV LOADER
-# ============================================================
-
-def load_csv(path):
+def get_secret(name: str):
+    """
+    Read secret from Streamlit Cloud secrets first,
+    then fall back to environment variables.
+    """
 
     try:
+        value = st.secrets.get(name)
 
-        if not path.exists():
-            return pd.DataFrame()
+        if value:
+            return value
 
-        return pd.read_csv(path)
+    except Exception:
+        pass
 
-    except Exception as e:
-
-        st.warning(f"Unable to read {path.name}: {e}")
-
-        return pd.DataFrame()
+    return os.getenv(name)
 
 
-trade_history = load_csv(TRADE_HISTORY)
-trade_log = load_csv(TRADE_LOG)
+def money(value):
+    """Format numeric value as USD."""
+
+    try:
+        return f"${float(value):,.2f}"
+
+    except Exception:
+        return "$0.00"
 
 
-# ============================================================
-# TRADE DATA
-# ============================================================
+def percent(value):
+    """Format decimal or percentage safely."""
 
-if not trade_history.empty:
-    trades = trade_history.copy()
+    try:
+        value = float(value)
 
-elif not trade_log.empty:
-    trades = trade_log.copy()
+        # Alpaca unrealized_plpc is normally decimal.
+        # Example:
+        # -0.475 = -47.50%
+        if abs(value) <= 1:
+            value *= 100
 
-else:
-    trades = pd.DataFrame()
+        return f"{value:.2f}%"
+
+    except Exception:
+        return "0.00%"
+
+
+def safe_float(value, default=0.0):
+
+    try:
+        return float(value)
+
+    except Exception:
+        return default
+
+
+def normalize_columns(df):
+
+    if df is None or df.empty:
+        return df
+
+    df = df.copy()
+
+    df.columns = [
+        str(column).strip().lower().replace(" ", "_")
+        for column in df.columns
+    ]
+
+    return df
+
+
+def find_pnl_column(df):
+
+    if df is None or df.empty:
+        return None
+
+    possible_columns = [
+        "pnl",
+        "p&l",
+        "profit_loss",
+        "profit",
+        "realized_pnl",
+        "realized_profit",
+        "net_pnl",
+    ]
+
+    for column in possible_columns:
+
+        if column in df.columns:
+            return column
+
+    return None
 
 
 # ============================================================
 # ALPACA CONNECTION
 # ============================================================
 
-API_KEY = os.getenv("ALPACA_API_KEY")
-SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
+API_KEY = get_secret("ALPACA_API_KEY")
+SECRET_KEY = get_secret("ALPACA_SECRET_KEY")
 
 trading_client = None
+alpaca_error = None
+
 
 if TradingClient is not None and API_KEY and SECRET_KEY:
 
@@ -599,258 +375,513 @@ if TradingClient is not None and API_KEY and SECRET_KEY:
             paper=True,
         )
 
-    except Exception:
+    except Exception as exc:
 
-        trading_client = None
+        alpaca_error = str(exc)
+
+elif not API_KEY or not SECRET_KEY:
+
+    alpaca_error = (
+        "Alpaca API credentials are not configured."
+    )
 
 
 # ============================================================
-# ACCOUNT
+# LOAD TRADE HISTORY
+# ============================================================
+
+def load_trade_history():
+
+    if TRADE_HISTORY.exists():
+
+        try:
+
+            df = pd.read_csv(TRADE_HISTORY)
+
+            return normalize_columns(df)
+
+        except Exception:
+
+            pass
+
+    if TRADE_LOG.exists():
+
+        try:
+
+            df = pd.read_csv(TRADE_LOG)
+
+            return normalize_columns(df)
+
+        except Exception:
+
+            pass
+
+    return pd.DataFrame()
+
+
+trade_history = load_trade_history()
+
+
+# ============================================================
+# ALPACA ACCOUNT DATA
 # ============================================================
 
 account = None
 positions = []
+orders = []
 
-if trading_client:
+
+if trading_client is not None:
 
     try:
+
         account = trading_client.get_account()
-    except Exception:
-        account = None
+
+    except Exception as exc:
+
+        alpaca_error = f"Account error: {exc}"
 
     try:
+
         positions = trading_client.get_all_positions()
+
     except Exception:
+
         positions = []
 
-
-# ============================================================
-# EQUITY
-# ============================================================
-
-equity_value = None
-
-if account:
-
     try:
-        equity_value = float(account.equity)
+
+        if QueryOrderStatus is not None:
+
+            orders = trading_client.get_orders(
+                filter=QueryOrderStatus.ALL
+            )
+
+        else:
+
+            orders = trading_client.get_orders()
+
     except Exception:
-        equity_value = None
+
+        orders = []
 
 
 # ============================================================
-# TRADING OVERVIEW
+# ACCOUNT VALUES
 # ============================================================
 
-st.markdown(
-    '<div class="section-title">📡 Trading Overview</div>',
-    unsafe_allow_html=True,
+if account is not None:
+
+    equity = safe_float(
+        getattr(account, "equity", 0)
+    )
+
+    last_equity = safe_float(
+        getattr(account, "last_equity", equity)
+    )
+
+    cash = safe_float(
+        getattr(account, "cash", 0)
+    )
+
+    buying_power = safe_float(
+        getattr(account, "buying_power", 0)
+    )
+
+    day_change = equity - last_equity
+
+else:
+
+    equity = 0.0
+    last_equity = 0.0
+    cash = 0.0
+    buying_power = 0.0
+    day_change = 0.0
+
+
+# ============================================================
+# TRADE STATISTICS
+# ============================================================
+
+completed_trades = 0
+winning_trades = 0
+losing_trades = 0
+total_pnl = 0.0
+average_pnl = 0.0
+win_rate = 0.0
+
+
+def calculate_trade_stats(df):
+
+    if df is None or df.empty:
+
+        return (
+            0,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+        )
+
+    pnl_column = find_pnl_column(df)
+
+    if pnl_column is None:
+
+        return (
+            0,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+        )
+
+    pnl_values = pd.to_numeric(
+        df[pnl_column],
+        errors="coerce",
+    ).dropna()
+
+    if pnl_values.empty:
+
+        return (
+            0,
+            0,
+            0,
+            0.0,
+            0.0,
+            0.0,
+        )
+
+    completed = len(pnl_values)
+
+    wins = int(
+        (pnl_values > 0).sum()
+    )
+
+    losses = int(
+        (pnl_values < 0).sum()
+    )
+
+    total = float(
+        pnl_values.sum()
+    )
+
+    average = float(
+        pnl_values.mean()
+    )
+
+    win_percentage = (
+        (wins / completed) * 100
+        if completed > 0
+        else 0.0
+    )
+
+    return (
+        completed,
+        wins,
+        losses,
+        total,
+        average,
+        win_percentage,
+    )
+
+
+(
+    completed_trades,
+    winning_trades,
+    losing_trades,
+    total_pnl,
+    average_pnl,
+    win_rate,
+) = calculate_trade_stats(
+    trade_history
 )
 
-st.markdown(
-    '<div class="section-subtitle">'
-    'Real-time overview of the AlphaPilot paper-trading environment'
-    '</div>',
-    unsafe_allow_html=True,
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+with st.sidebar:
+
+    st.title("🤖 AlphaPilot AI")
+
+    st.caption(
+        "🚀 Autonomous AI Paper-Trading System"
+    )
+
+    st.divider()
+
+    st.subheader("📊 Trading Mode")
+
+    st.success(
+        "🟢 PAPER TRADING"
+    )
+
+    st.caption(
+        "📡 Real market/account data • "
+        "💰 No live-money execution"
+    )
+
+    st.divider()
+
+    st.subheader("🔄 Trading Pipeline")
+
+    pipeline_options = [
+        "📊 01 · Market Analysis",
+        "🧠 02 · AI Signal",
+        "⚙️ 03 · Options Selection",
+        "🛡️ 04 · Risk Checks",
+        "🚀 05 · Paper Entry",
+        "👁️ 06 · Monitoring",
+        "🏁 07 · Exit",
+    ]
+
+    selected_stage = st.radio(
+        "Navigate",
+        pipeline_options,
+        index=0,
+        label_visibility="collapsed",
+    )
+
+    st.divider()
+
+    st.subheader("🔌 Connection")
+
+    if trading_client is not None:
+
+        st.success(
+            "🟢 Alpaca Connected"
+        )
+
+    else:
+
+        st.error(
+            "🔴 Alpaca Not Connected"
+        )
+
+    if alpaca_error:
+
+        with st.expander(
+            "🔍 Connection Details"
+        ):
+
+            st.caption(
+                str(alpaca_error)
+            )
+
+    st.divider()
+
+    st.caption(
+        "🕒 Updated: "
+        + datetime.now().strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+    )
+
+
+# ============================================================
+# HEADER
+# ============================================================
+
+st.title(
+    "🤖 AlphaPilot AI"
+)
+
+st.caption(
+    "🚀 AI-powered autonomous options paper-trading system"
 )
 
 
-m1, m2, m3, m4 = st.columns(4)
+header_col1, header_col2 = st.columns(
+    [4, 1]
+)
 
 
-with m1:
+with header_col1:
 
     st.markdown(
         """
-        <div class="metric-card">
-
-            <div class="metric-label">
-                Trading Mode
-            </div>
-
-            <div class="metric-value">
-                PAPER
-            </div>
-
-            <div class="metric-sub">
-                Risk-free simulation
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True,
+        **📊 Market Analysis → 🧠 AI Signal → ⚙️ Options Selection
+        → 🛡️ Risk Checks → 🚀 Paper Entry → 👁️ Monitoring → 🏁 Exit**
+        """
     )
 
 
-with m2:
+with header_col2:
 
-    equity_text = (
-        f"${equity_value:,.2f}"
-        if equity_value is not None
-        else "N/A"
-    )
+    if trading_client is not None:
 
-    st.markdown(
-        f"""
-        <div class="metric-card">
+        st.success(
+            "🟢 LIVE DATA"
+        )
 
-            <div class="metric-label">
-                Account Equity
-            </div>
+    else:
 
-            <div class="metric-value">
-                {equity_text}
-            </div>
-
-            <div class="metric-sub">
-                Alpaca paper account
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        st.error(
+            "🔴 OFFLINE"
+        )
 
 
-with m3:
+# ============================================================
+# ACCOUNT OVERVIEW
+# ============================================================
 
-    st.markdown(
-        f"""
-        <div class="metric-card">
+st.divider()
 
-            <div class="metric-label">
-                Open Positions
-            </div>
+st.header(
+    "📊 Trading Overview"
+)
 
-            <div class="metric-value">
-                {len(positions)}
-            </div>
 
-            <div class="metric-sub">
-                Active positions
-            </div>
+metric1, metric2, metric3, metric4 = st.columns(
+    4
+)
 
-        </div>
-        """,
-        unsafe_allow_html=True,
+
+with metric1:
+
+    st.metric(
+        "💰 Account Equity",
+        money(equity),
+        delta=money(day_change),
     )
 
 
-with m4:
+with metric2:
 
-    st.markdown(
-        f"""
-        <div class="metric-card">
+    st.metric(
+        "💵 Cash",
+        money(cash),
+    )
 
-            <div class="metric-label">
-                Completed Trades
-            </div>
 
-            <div class="metric-value">
-                {len(trades)}
-            </div>
+with metric3:
 
-            <div class="metric-sub">
-                Recorded executions
-            </div>
+    st.metric(
+        "⚡ Buying Power",
+        money(buying_power),
+    )
 
-        </div>
-        """,
-        unsafe_allow_html=True,
+
+with metric4:
+
+    st.metric(
+        "📈 Open Positions",
+        len(positions),
+    )
+
+
+metric5, metric6, metric7, metric8 = st.columns(
+    4
+)
+
+
+with metric5:
+
+    st.metric(
+        "🎯 Total P&L",
+        money(total_pnl),
+    )
+
+
+with metric6:
+
+    st.metric(
+        "🏆 Win Rate",
+        percent(win_rate),
+    )
+
+
+with metric7:
+
+    st.metric(
+        "📋 Completed Trades",
+        completed_trades,
+    )
+
+
+with metric8:
+
+    st.metric(
+        "🧮 Average P&L",
+        money(average_pnl),
     )
 
 
 # ============================================================
-# PIPELINE
+# AUTONOMOUS TRADING PIPELINE
 # ============================================================
 
-st.markdown(
-    '<div class="section-title">🔄 AlphaPilot Pipeline</div>',
-    unsafe_allow_html=True,
+st.divider()
+
+st.header(
+    "🔄 Autonomous Trading Pipeline"
 )
 
-st.markdown(
-    '<div class="section-subtitle">'
-    'End-to-end automated trading workflow'
-    '</div>',
-    unsafe_allow_html=True,
-)
 
-st.markdown(
-    """
-    <div class="pipeline-box">
+pipeline_cols = st.columns(7)
 
-        <div class="pipeline">
 
-            <div class="pipeline-step">
-                📊<br>
-                Market Analysis
+pipeline_labels = [
+    ("01", "Market", "📊"),
+    ("02", "Signal", "🧠"),
+    ("03", "Options", "⚙️"),
+    ("04", "Risk", "🛡️"),
+    ("05", "Entry", "🚀"),
+    ("06", "Monitor", "👁️"),
+    ("07", "Exit", "🏁"),
+]
+
+
+for col, (number, label, icon) in zip(
+    pipeline_cols,
+    pipeline_labels,
+):
+
+    with col:
+
+        st.markdown(
+            f"""
+            <div class="pipeline-card">
+                <div class="pipeline-number">
+                    STEP {number}
+                </div>
+
+                <div class="pipeline-icon">
+                    {icon}
+                </div>
+
+                <div class="pipeline-title">
+                    {label}
+                </div>
             </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-            <div class="pipeline-arrow">→</div>
+        if selected_stage.startswith(number):
 
-            <div class="pipeline-step">
-                🤖<br>
-                AI Signal
-            </div>
+            st.success(
+                "Selected"
+            )
 
-            <div class="pipeline-arrow">→</div>
+        else:
 
-            <div class="pipeline-step">
-                ⚙️<br>
-                Options Selection
-            </div>
-
-            <div class="pipeline-arrow">→</div>
-
-            <div class="pipeline-step">
-                🛡️<br>
-                Risk Checks
-            </div>
-
-            <div class="pipeline-arrow">→</div>
-
-            <div class="pipeline-step">
-                💹<br>
-                Paper Entry
-            </div>
-
-            <div class="pipeline-arrow">→</div>
-
-            <div class="pipeline-step">
-                👁️<br>
-                Monitoring
-            </div>
-
-            <div class="pipeline-arrow">→</div>
-
-            <div class="pipeline-step">
-                🚪<br>
-                Exit
-            </div>
-
-        </div>
-
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+            st.caption(
+                "Pipeline"
+            )
 
 
 # ============================================================
-# CURRENT POSITION
+# CURRENT POSITIONS
 # ============================================================
 
-st.markdown(
-    '<div class="section-title">📊 Current Position</div>',
-    unsafe_allow_html=True,
-)
+st.divider()
 
-st.markdown(
-    '<div class="section-subtitle">'
-    'Live position information from the Alpaca paper account'
-    '</div>',
-    unsafe_allow_html=True,
+st.header(
+    "💼 Current Positions"
 )
 
 
@@ -860,207 +891,599 @@ if positions:
 
     for position in positions:
 
-        try:
+        position_rows.append(
+            {
+                "Symbol": getattr(
+                    position,
+                    "symbol",
+                    "",
+                ),
 
-            position_rows.append(
+                "Qty": safe_float(
+                    getattr(
+                        position,
+                        "qty",
+                        0,
+                    )
+                ),
+
+                "Side": str(
+                    getattr(
+                        position,
+                        "side",
+                        "",
+                    )
+                ).replace(
+                    "PositionSide.",
+                    "",
+                ),
+
+                "Avg Entry": money(
+                    getattr(
+                        position,
+                        "avg_entry_price",
+                        0,
+                    )
+                ),
+
+                "Current Price": money(
+                    getattr(
+                        position,
+                        "current_price",
+                        0,
+                    )
+                ),
+
+                "Market Value": money(
+                    getattr(
+                        position,
+                        "market_value",
+                        0,
+                    )
+                ),
+
+                "Unrealized P&L": money(
+                    getattr(
+                        position,
+                        "unrealized_pl",
+                        0,
+                    )
+                ),
+
+                "P&L %": percent(
+                    getattr(
+                        position,
+                        "unrealized_plpc",
+                        0,
+                    )
+                ),
+            }
+        )
+
+    position_df = pd.DataFrame(
+        position_rows
+    )
+
+    st.dataframe(
+        position_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+else:
+
+    st.info(
+        "ℹ️ No open positions currently exist "
+        "in the Alpaca paper account."
+    )
+
+
+# ============================================================
+# STAGE 01 - MARKET ANALYSIS
+# ============================================================
+
+st.divider()
+
+st.header(
+    "📊 01 Market Analysis"
+)
+
+
+if selected_stage.startswith("01"):
+
+    st.success(
+        "🟢 Market Analysis stage selected."
+    )
+
+
+st.markdown(
+    """
+    AlphaPilot begins by collecting market information
+    before considering any trade.
+
+    The analysis layer can evaluate:
+
+    - 📈 Price movement
+    - 📊 SMA20
+    - 📊 SMA50
+    - 📉 RSI
+    - 📈 MACD
+    - 🔊 Trading volume
+    - 🌐 Overall market conditions
+    - 🎯 SPY market environment
+
+    The purpose of this stage is to avoid making an
+    options decision before the underlying market has
+    been evaluated.
+    """
+)
+
+
+market_col1, market_col2 = st.columns(2)
+
+
+with market_col1:
+
+    st.subheader(
+        "📡 Market Data"
+    )
+
+    st.info(
+        "Market-analysis values are taken from the "
+        "trading/data pipeline when available. "
+        "The dashboard does not invent indicator values."
+    )
+
+
+with market_col2:
+
+    st.subheader(
+        "🧭 Decision Principle"
+    )
+
+    st.write(
+        "Analyze the underlying market first, then allow "
+        "the AI signal engine to determine whether a "
+        "trade should be considered."
+    )
+
+
+# ============================================================
+# STAGE 02 - AI SIGNAL
+# ============================================================
+
+st.divider()
+
+st.header(
+    "🧠 02 AI Signal"
+)
+
+
+if selected_stage.startswith("02"):
+
+    st.success(
+        "🟢 AI Signal stage selected."
+    )
+
+
+st.markdown(
+    """
+    AlphaPilot combines multiple technical signals
+    before generating a trading decision.
+
+    Typical signal inputs include:
+
+    - 📊 Price vs SMA20
+    - 📊 SMA20 vs SMA50
+    - 📉 RSI momentum
+    - 📈 MACD direction
+    - 🔊 Volume
+    - 🌐 Market conditions
+    - 🎯 Confidence threshold
+    """
+)
+
+
+signal_col1, signal_col2 = st.columns(2)
+
+
+with signal_col1:
+
+    st.subheader(
+        "🎯 Signal Output"
+    )
+
+    st.info(
+        "BUY SIGNAL or NO TRADE"
+    )
+
+
+with signal_col2:
+
+    st.subheader(
+        "🧠 Confidence Gate"
+    )
+
+    st.info(
+        "A trade should only proceed when the configured "
+        "confidence requirement is satisfied."
+    )
+
+
+# ============================================================
+# STAGE 03 - OPTIONS SELECTION
+# ============================================================
+
+st.divider()
+
+st.header(
+    "⚙️ 03 Options Selection"
+)
+
+
+if selected_stage.startswith("03"):
+
+    st.success(
+        "🟢 Options Selection stage selected."
+    )
+
+
+st.markdown(
+    """
+    After an underlying-market signal is generated,
+    AlphaPilot evaluates available options contracts.
+
+    The selection process can consider:
+
+    - 🎯 Strike price distance
+    - 📅 Expiration
+    - 📊 Open interest
+    - 🔎 Contract suitability
+    - 🏆 Selection score
+    - ⚖️ Risk/reward characteristics
+    """
+)
+
+
+options_col1, options_col2 = st.columns(2)
+
+
+with options_col1:
+
+    st.subheader(
+        "🎯 Underlying"
+    )
+
+    st.metric(
+        "Primary Underlying",
+        "SPY",
+    )
+
+
+with options_col2:
+
+    st.subheader(
+        "🔎 Selection Status"
+    )
+
+    st.info(
+        "Contract selection is performed by the "
+        "options-strategy layer."
+    )
+
+
+# ============================================================
+# STAGE 04 - RISK CHECKS
+# ============================================================
+
+st.divider()
+
+st.header(
+    "🛡️ 04 Risk Checks"
+)
+
+
+if selected_stage.startswith("04"):
+
+    st.success(
+        "🟢 Risk Checks stage selected."
+    )
+
+
+risk_col1, risk_col2, risk_col3 = st.columns(
+    3
+)
+
+
+with risk_col1:
+
+    st.subheader(
+        "📐 Position Risk"
+    )
+
+    st.write(
+        "Position sizing and account exposure should "
+        "be checked before entry."
+    )
+
+
+with risk_col2:
+
+    st.subheader(
+        "🛑 Stop Loss"
+    )
+
+    st.write(
+        "Stop-loss rules are evaluated before and "
+        "during a trade."
+    )
+
+
+with risk_col3:
+
+    st.subheader(
+        "🎯 Take Profit"
+    )
+
+    st.write(
+        "Take-profit conditions are monitored after entry."
+    )
+
+
+# ============================================================
+# STAGE 05 - PAPER ENTRY
+# ============================================================
+
+st.divider()
+
+st.header(
+    "🚀 05 Paper Entry"
+)
+
+
+if selected_stage.startswith("05"):
+
+    st.success(
+        "🟢 Paper Entry stage selected."
+    )
+
+
+entry_col1, entry_col2 = st.columns(2)
+
+
+with entry_col1:
+
+    st.subheader(
+        "🏦 Execution Environment"
+    )
+
+    st.success(
+        "🟢 Alpaca Paper Trading"
+    )
+
+    st.caption(
+        "No live-money order execution is performed "
+        "by this dashboard."
+    )
+
+
+with entry_col2:
+
+    st.subheader(
+        "📋 Order Activity"
+    )
+
+    if orders:
+
+        recent_orders = []
+
+        for order in orders[:10]:
+
+            recent_orders.append(
                 {
-                    "Symbol": str(position.symbol),
-                    "Qty": float(position.qty),
-                    "Entry": f"${float(position.avg_entry_price):.2f}",
-                    "Current": f"${float(position.current_price):.2f}",
-                    "Market Value": f"${float(position.market_value):,.2f}",
-                    "Unrealized P&L": f"${float(position.unrealized_pl):,.2f}",
-                    "P&L %": f"{float(position.unrealized_plpc) * 100:.2f}%",
+                    "Symbol": getattr(
+                        order,
+                        "symbol",
+                        "",
+                    ),
+
+                    "Side": str(
+                        getattr(
+                            order,
+                            "side",
+                            "",
+                        )
+                    ).replace(
+                        "OrderSide.",
+                        "",
+                    ),
+
+                    "Type": str(
+                        getattr(
+                            order,
+                            "order_type",
+                            "",
+                        )
+                    ).replace(
+                        "OrderType.",
+                        "",
+                    ),
+
+                    "Qty": getattr(
+                        order,
+                        "qty",
+                        "",
+                    ),
+
+                    "Status": str(
+                        getattr(
+                            order,
+                            "status",
+                            "",
+                        )
+                    ).replace(
+                        "OrderStatus.",
+                        "",
+                    ),
                 }
             )
 
-        except Exception:
-            continue
-
-    if position_rows:
+        orders_df = pd.DataFrame(
+            recent_orders
+        )
 
         st.dataframe(
-            pd.DataFrame(position_rows),
-            width="stretch",
+            orders_df,
+            use_container_width=True,
             hide_index=True,
         )
 
     else:
 
-        st.markdown(
-            """
-            <div class="empty-position">
-
-                <div class="empty-title">
-                    ⚠️ Position Data Unavailable
-                </div>
-
-                <div class="empty-text">
-                    Alpaca returned a position but
-                    the details could not be displayed.
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True,
+        st.info(
+            "ℹ️ No order records are currently available."
         )
 
-else:
 
-    st.markdown(
-        """
-        <div class="empty-position">
+# ============================================================
+# STAGE 06 - MONITORING
+# ============================================================
 
-            <div class="empty-title">
-                📭 No Open Positions
-            </div>
+st.divider()
 
-            <div class="empty-text">
-                AlphaPilot is currently waiting for
-                a qualified trading signal.
-            </div>
+st.header(
+    "👁️ 06 Monitoring"
+)
 
-        </div>
-        """,
-        unsafe_allow_html=True,
+
+if selected_stage.startswith("06"):
+
+    st.success(
+        "🟢 Monitoring stage selected."
     )
 
 
-# ============================================================
-# DECISION ENGINE
-# ============================================================
-
-st.markdown(
-    '<div class="section-title">🤖 AlphaPilot Decision Engine</div>',
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    '<div class="section-subtitle">'
-    'Signals, market analysis and risk controls'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-c1, c2, c3 = st.columns(3)
+monitor_col1, monitor_col2 = st.columns(2)
 
 
-with c1:
+with monitor_col1:
 
-    st.markdown(
-        """
-        <div class="status-card">
-
-            <div class="status-title">
-                📊 Market Analysis
-            </div>
-
-            <div class="status-text">
-
-                <span class="blue">
-                    ● ACTIVE
-                </span>
-
-                <br><br>
-
-                SMA20 vs SMA50<br>
-                RSI Momentum<br>
-                MACD Direction<br>
-                Volume Analysis<br>
-                Market Conditions
-
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.subheader(
+        "📈 Open Position Monitoring"
     )
-
-
-with c2:
 
     if positions:
 
-        signal_status = (
-            '<span class="green">'
-            '🟢 POSITION ACTIVE'
-            '</span>'
-        )
+        for position in positions:
 
-        signal_description = (
-            "AlphaPilot currently has an active "
-            "paper-trading position."
-        )
+            symbol = getattr(
+                position,
+                "symbol",
+                "Unknown",
+            )
+
+            unrealized = safe_float(
+                getattr(
+                    position,
+                    "unrealized_pl",
+                    0,
+                )
+            )
+
+            unrealized_pct = safe_float(
+                getattr(
+                    position,
+                    "unrealized_plpc",
+                    0,
+                )
+            )
+
+            st.metric(
+                f"📌 {symbol}",
+                money(unrealized),
+                delta=percent(
+                    unrealized_pct
+                ),
+            )
 
     else:
 
-        signal_status = (
-            '<span class="yellow">'
-            '🟡 WAITING FOR SIGNAL'
-            '</span>'
+        st.info(
+            "ℹ️ There are currently no positions to monitor."
         )
 
-        signal_description = (
-            "No active position. AlphaPilot is "
-            "waiting for a qualified trade setup."
-        )
 
-    st.markdown(
-        f"""
-        <div class="status-card">
+with monitor_col2:
 
-            <div class="status-title">
-                🤖 AI Signal
-            </div>
+    st.subheader(
+        "🔍 Monitoring Rules"
+    )
 
-            <div class="status-text">
+    st.write(
+        """
+        📍 Current market price
 
-                {signal_status}
+        💰 Position P&L
 
-                <br><br>
+        🛑 Stop-loss condition
 
-                {signal_description}
+        🎯 Take-profit condition
 
-                <br><br>
+        🔄 Exit signal
 
-                Confidence threshold enabled.
-
-            </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True,
+        📌 Position status
+        """
     )
 
 
-with c3:
+# ============================================================
+# STAGE 07 - EXIT
+# ============================================================
 
-    st.markdown(
-        """
-        <div class="status-card">
+st.divider()
 
-            <div class="status-title">
-                🛡️ Risk Manager
-            </div>
+st.header(
+    "🏁 07 Exit"
+)
 
-            <div class="status-text">
 
-                <span class="green">
-                    🟢 ACTIVE
-                </span>
+if selected_stage.startswith("07"):
 
-                <br><br>
+    st.success(
+        "🟢 Exit stage selected."
+    )
 
-                Stop Loss Protection<br>
-                Take Profit Protection<br>
-                Duplicate Exit Protection<br>
-                Position Monitoring
 
-            </div>
+st.markdown(
+    """
+    The exit stage closes a paper position when the
+    configured exit conditions are satisfied.
 
-        </div>
-        """,
-        unsafe_allow_html=True,
+    Possible exit triggers include:
+
+    - 🛑 Stop loss
+    - 🎯 Take profit
+    - 🔄 AI reversal
+    - 🌐 Market-condition change
+    - 🛡️ Risk-control condition
+    - 👤 Manual paper-account intervention
+    """
+)
+
+
+if positions:
+
+    st.warning(
+        "⚠️ Open position(s) are currently present. "
+        "Exit decisions should be generated by the "
+        "monitoring/risk logic."
+    )
+
+else:
+
+    st.success(
+        "🟢 No open positions currently require "
+        "an automated exit."
     )
 
 
@@ -1068,30 +1491,45 @@ with c3:
 # TRADE HISTORY
 # ============================================================
 
-st.markdown(
-    '<div class="section-title">📜 Trade History</div>',
-    unsafe_allow_html=True,
+st.divider()
+
+st.header(
+    "📜 Trade History"
 )
 
-st.markdown(
-    '<div class="section-subtitle">'
-    'Recorded executions from the AlphaPilot trading engine'
-    '</div>',
-    unsafe_allow_html=True,
-)
 
-if trades.empty:
+if not trade_history.empty:
 
-    st.info(
-        "No completed trades have been recorded yet."
+    if TRADE_HISTORY.exists():
+
+        history_source = (
+            "agents/trade_history.csv"
+        )
+
+    else:
+
+        history_source = (
+            "logs/trades.csv"
+        )
+
+    st.caption(
+        f"📂 Source: {history_source}"
+    )
+
+    display_history = trade_history.copy()
+
+    st.dataframe(
+        display_history,
+        use_container_width=True,
+        hide_index=True,
     )
 
 else:
 
-    st.dataframe(
-        trades,
-        width="stretch",
-        hide_index=True,
+    st.info(
+        "ℹ️ No trade-history CSV is currently available. "
+        "The dashboard will populate this section when "
+        "the trading pipeline records completed trades."
     )
 
 
@@ -1099,197 +1537,295 @@ else:
 # PERFORMANCE
 # ============================================================
 
-st.markdown(
-    '<div class="section-title">📈 Performance Analysis</div>',
-    unsafe_allow_html=True,
+st.divider()
+
+st.header(
+    "📈 Performance"
 )
 
-pnl_column = None
 
-possible_columns = [
-    "pnl",
-    "PnL",
-    "P&L",
-    "profit",
-    "profit_loss",
-    "realized_pl",
-    "realized_pnl",
-]
-
-for column in possible_columns:
-
-    if column in trades.columns:
-
-        pnl_column = column
-        break
+perf_col1, perf_col2 = st.columns(2)
 
 
-if pnl_column is None:
+with perf_col1:
 
-    st.info(
-        "Performance statistics will appear after "
-        "trades containing P&L data are logged."
+    st.subheader(
+        "📊 P&L Summary"
     )
 
-else:
+    performance_df = pd.DataFrame(
+        {
+            "Metric": [
+                "🎯 Total P&L",
+                "🧮 Average P&L",
+                "🏆 Winning Trades",
+                "📉 Losing Trades",
+                "📊 Win Rate",
+            ],
 
-    pnl = pd.to_numeric(
-        trades[pnl_column],
-        errors="coerce",
-    ).dropna()
+            "Value": [
+                money(total_pnl),
+                money(average_pnl),
+                winning_trades,
+                losing_trades,
+                percent(win_rate),
+            ],
+        }
+    )
 
-    if pnl.empty:
+    st.dataframe(
+        performance_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+with perf_col2:
+
+    st.subheader(
+        "📉 P&L Visualization"
+    )
+
+    pnl_column = find_pnl_column(
+        trade_history
+    )
+
+    if pnl_column is not None:
+
+        chart_df = trade_history.copy()
+
+        chart_df[pnl_column] = pd.to_numeric(
+            chart_df[pnl_column],
+            errors="coerce",
+        )
+
+        chart_df = chart_df.dropna(
+            subset=[pnl_column]
+        )
+
+        if not chart_df.empty:
+
+            chart_df["Cumulative P&L"] = (
+                chart_df[pnl_column].cumsum()
+            )
+
+            chart_df["Trade"] = range(
+                1,
+                len(chart_df) + 1
+            )
+
+            chart_data = chart_df.set_index(
+                "Trade"
+            )[
+                ["Cumulative P&L"]
+            ]
+
+            st.line_chart(
+                chart_data,
+                height=300,
+            )
+
+            st.caption(
+                "📊 Cumulative realized P&L based on "
+                "recorded trade-history data."
+            )
+
+        else:
+
+            st.info(
+                "ℹ️ No numeric P&L records are available "
+                "for plotting."
+            )
+
+    else:
 
         st.info(
-            "P&L column exists but does not contain "
-            "numeric values yet."
+            "ℹ️ A P&L column was not found in the "
+            "trade-history file."
+        )
+
+
+# ============================================================
+# AI DECISION / EXPLAINABILITY
+# ============================================================
+
+st.divider()
+
+st.header(
+    "🤖 AI Decision Engine"
+)
+
+
+decision_col1, decision_col2 = st.columns(2)
+
+
+with decision_col1:
+
+    st.subheader(
+        "🔄 Decision Flow"
+    )
+
+    st.write(
+        """
+        1. 📡 Collect market data
+
+        2. 📊 Calculate technical indicators
+
+        3. 🌐 Evaluate market conditions
+
+        4. 🧠 Generate AI/trading signal
+
+        5. 🎯 Apply confidence threshold
+
+        6. ⚙️ Select options contract
+
+        7. 🛡️ Apply risk controls
+
+        8. 🚀 Submit paper order
+
+        9. 👁️ Monitor position
+
+        10. 🏁 Exit according to defined rules
+        """
+    )
+
+
+with decision_col2:
+
+    st.subheader(
+        "🔎 Explainability"
+    )
+
+    st.info(
+        "AlphaPilot is designed to make the trading "
+        "decision process traceable instead of treating "
+        "the final BUY/NO TRADE decision as a black box."
+    )
+
+
+# ============================================================
+# DATA SOURCES & SYSTEM STATUS
+# ============================================================
+
+st.divider()
+
+st.header(
+    "📡 Data Sources & System Status"
+)
+
+
+source_col1, source_col2, source_col3 = st.columns(
+    3
+)
+
+
+with source_col1:
+
+    st.subheader(
+        "🏦 Broker"
+    )
+
+    if trading_client is not None:
+
+        st.success(
+            "🟢 Alpaca Paper API"
         )
 
     else:
 
-        total_pnl = float(pnl.sum())
-        winning = int((pnl > 0).sum())
-        total = len(pnl)
-
-        win_rate = (
-            winning / total * 100
-            if total > 0
-            else 0
-        )
-
-        avg_pnl = float(pnl.mean())
-
-        p1, p2, p3, p4 = st.columns(4)
-
-        with p1:
-            st.metric(
-                "Total P&L",
-                f"${total_pnl:,.2f}",
-            )
-
-        with p2:
-            st.metric(
-                "Win Rate",
-                f"{win_rate:.1f}%",
-            )
-
-        with p3:
-            st.metric(
-                "Winning Trades",
-                winning,
-            )
-
-        with p4:
-            st.metric(
-                "Average P&L",
-                f"${avg_pnl:,.2f}",
-            )
-
-        chart_df = pd.DataFrame(
-            {
-                "Trade": range(1, len(pnl) + 1),
-                "P&L": pnl.values,
-            }
-        )
-
-        chart_df["Cumulative P&L"] = (
-            chart_df["P&L"].cumsum()
-        )
-
-        fig = px.line(
-            chart_df,
-            x="Trade",
-            y="Cumulative P&L",
-            markers=True,
-        )
-
-        fig.update_layout(
-            template="plotly_dark",
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#cbd5e1"),
-            margin=dict(
-                l=20,
-                r=20,
-                t=25,
-                b=20,
-            ),
-            xaxis=dict(
-                title="Trade",
-                gridcolor="#263244",
-            ),
-            yaxis=dict(
-                title="Cumulative P&L ($)",
-                gridcolor="#263244",
-            ),
-        )
-
-        st.plotly_chart(
-            fig,
-            width="stretch",
+        st.error(
+            "🔴 Alpaca unavailable"
         )
 
 
-# ============================================================
-# DATA SOURCES
-# ============================================================
+with source_col2:
 
-st.markdown(
-    '<div class="section-title">📁 System Data Sources</div>',
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    '<div class="section-subtitle">'
-    'Files currently being used by the dashboard'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-d1, d2 = st.columns(2)
-
-
-with d1:
+    st.subheader(
+        "📜 Trade History"
+    )
 
     if TRADE_HISTORY.exists():
 
-        st.success("✅ agents/trade_history.csv")
+        st.success(
+            "🟢 agents/trade_history.csv"
+        )
+
+    elif TRADE_LOG.exists():
+
+        st.success(
+            "🟢 logs/trades.csv"
+        )
 
     else:
 
-        st.warning("⚠️ agents/trade_history.csv not found")
+        st.info(
+            "⚪ No trade-history file"
+        )
 
 
-with d2:
+with source_col3:
 
-    if TRADE_LOG.exists():
+    st.subheader(
+        "🔐 Execution Mode"
+    )
 
-        st.success("✅ logs/trades.csv")
+    st.success(
+        "🟢 PAPER ONLY"
+    )
 
-    else:
 
-        st.warning("⚠️ logs/trades.csv not found")
+# ============================================================
+# SYSTEM INFORMATION
+# ============================================================
+
+st.divider()
+
+
+with st.expander(
+    "⚙️ System Information"
+):
+
+    st.write(
+        {
+            "Application": "AlphaPilot AI",
+            "Trading Mode": "Paper Trading",
+            "Broker": "Alpaca",
+            "Account Connected": (
+                trading_client is not None
+            ),
+            "Account Equity": equity,
+            "Cash": cash,
+            "Buying Power": buying_power,
+            "Open Positions": len(positions),
+            "Completed Trades": completed_trades,
+            "Total P&L": total_pnl,
+            "Win Rate": win_rate,
+            "Trade History File": str(
+                TRADE_HISTORY
+            ),
+            "Trade Log File": str(
+                TRADE_LOG
+            ),
+        }
+    )
 
 
 # ============================================================
 # FOOTER
 # ============================================================
 
+st.divider()
+
 st.markdown(
     """
     <div class="footer">
-
-        🚀 AlphaPilot AI
-        &nbsp;•&nbsp;
-        Paper Trading System
-        &nbsp;•&nbsp;
-        Market Analysis → AI Signal → Options →
-        Risk → Execution → Monitoring
-
+        🤖 <strong>AlphaPilot AI</strong> •
+        Autonomous AI Paper-Trading System •
+        Python • Streamlit • Alpaca
         <br>
-
-        Built for demonstration and educational purposes.
-
+        🛡️ Paper trading only •
+        Real account/trade data when available •
+        No fabricated performance results
     </div>
     """,
     unsafe_allow_html=True,
