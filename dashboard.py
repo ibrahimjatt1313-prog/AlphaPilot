@@ -2352,27 +2352,24 @@ st.warning(
 
 st.markdown(
     """
-<div class="pipeline">
-
-    📊 Market
-    &nbsp;→&nbsp;
-    🧠 AI Signal
-    &nbsp;→&nbsp;
-    ⚙️ Options
-    &nbsp;→&nbsp;
-    🛡️ Risk
-    &nbsp;→&nbsp;
-    🚀 Paper Order
-    &nbsp;→&nbsp;
-    👁️ Monitor
-    &nbsp;→&nbsp;
-    🎯 Exit
-
-</div>
-""",
+    <div class="pipeline">
+        <span>📊 Market</span>
+        <span class="arrow">→</span>
+        <span>🧠 AI Signal</span>
+        <span class="arrow">→</span>
+        <span>⚙️ Options</span>
+        <span class="arrow">→</span>
+        <span>🛡️ Risk</span>
+        <span class="arrow">→</span>
+        <span>🚀 Paper Order</span>
+        <span class="arrow">→</span>
+        <span>👁️ Monitor</span>
+        <span class="arrow">→</span>
+        <span>🎯 Exit</span>
+    </div>
+    """,
     unsafe_allow_html=True,
 )
-
 
 # ============================================================
 # SETUP & PARAMETERS
@@ -4173,9 +4170,12 @@ with s4:
 
     else:
 
-        st.warning(
-            "↻ Manual Refresh"
-        )
+        if st.button(
+            "↻ Manual Refresh",
+            use_container_width=True,
+        ):
+
+            st.rerun()
 
 
 # ============================================================
@@ -4258,7 +4258,8 @@ st.header(
 )
 
 terminal_col1, terminal_col2, terminal_col3 = st.columns(
-    [1, 1, 1]
+    [1, 1, 1],
+    vertical_alignment="bottom",
 )
 
 with terminal_col1:
@@ -4274,6 +4275,7 @@ with terminal_col1:
             "Execution",
             "System",
         ],
+        label_visibility="visible",
     )
 
 with terminal_col2:
@@ -4285,9 +4287,25 @@ with terminal_col2:
 
 with terminal_col3:
 
-    st.caption(
-        "Terminal reflects current dashboard events."
+    st.markdown(
+        """
+        <div style="
+            height: 42px;
+            display: flex;
+            align-items: center;
+            padding-left: 8px;
+            color: #71859d;
+            font-size: 12px;
+        ">
+            Terminal reflects current dashboard events.
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
+
+if clear_terminal:
+
+    st.session_state.terminal_cleared = True
 
 if clear_terminal:
 
