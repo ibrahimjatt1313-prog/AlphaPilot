@@ -2567,7 +2567,7 @@ with st.expander(
 
 st.header(
     "🎮 Live Trading Controls",
-    anchor="controls",
+    anchor=False,
 )
 
 b1, b2, b3, b4, b5 = st.columns(5)
@@ -4162,20 +4162,40 @@ with s3:
 
 with s4:
 
-    if AUTO_REFRESH_AVAILABLE:
+    st.success(
+        "🔄 Auto Refresh Ready"
+    )
 
-        st.success(
-            "🔄 Auto Refresh Ready"
-        )
+    if st.button(
+        "↻ Manual Refresh",
+        use_container_width=True,
+        key="system_manual_refresh",
+    ):
 
-    else:
+        try:
 
-        if st.button(
-            "↻ Manual Refresh",
-            use_container_width=True,
-        ):
+            st.session_state.market_data = (
+                fetch_market_data()
+            )
+
+            st.session_state.analysis_timestamp = (
+                datetime.now()
+            )
+
+            st.session_state.market_error = None
+
+            st.session_state.ai_decision = None
+            st.session_state.selected_option = None
+            st.session_state.option_candidates = []
+            st.session_state.risk_result = None
 
             st.rerun()
+
+        except Exception as exc:
+
+            st.error(
+                f"❌ Refresh failed: {exc}"
+            )
 
 
 # ============================================================
@@ -4302,10 +4322,6 @@ with terminal_col3:
         """,
         unsafe_allow_html=True,
     )
-
-if clear_terminal:
-
-    st.session_state.terminal_cleared = True
 
 if clear_terminal:
 
