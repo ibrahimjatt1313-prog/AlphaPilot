@@ -61,7 +61,5 @@ tempCodeRunnerFile.py
 # PyInstaller
 *.spec
 
-agents/trade_state.json
 
-agents/trade_state.json
-agents/trade_state.json
+agents/trade_state.json

@@ -6,7 +6,7 @@ Purpose:
     when Stop Loss or Take Profit is triggered.
 
 Trade Lifecycle:
-    Real BUY FILLED
+    REAL BUY FILLED
         ↓
     trade_state.json
         ↓
@@ -14,11 +14,13 @@ Trade Lifecycle:
         ↓
     Stop Loss / Take Profit
         ↓
-    Real SELL
+    REAL SELL
         ↓
     SELL FILLED
         ↓
-    Actual P&L
+    Actual Alpaca Fill
+        ↓
+    Real P&L
         ↓
     trade_history.csv
         ↓
@@ -28,7 +30,7 @@ IMPORTANT:
     - PAPER TRADING ONLY
     - No fake fills
     - No fake P&L
-    - Trade history is updated ONLY after Alpaca confirms SELL FILLED
+    - Trade history updated ONLY after Alpaca confirms SELL FILLED
 """
 
 import csv
@@ -80,12 +82,9 @@ PAPER_TRADING = True
 # ============================================================
 
 try:
-
     from dotenv import load_dotenv
 
-    load_dotenv(
-        BASE_DIR / ".env"
-    )
+    load_dotenv(BASE_DIR / ".env")
 
 except Exception:
     pass
@@ -95,38 +94,22 @@ except Exception:
 # CREDENTIALS
 # ============================================================
 
-API_KEY = os.getenv(
-    "ALPACA_API_KEY"
-)
-
-SECRET_KEY = os.getenv(
-    "ALPACA_SECRET_KEY"
-)
+API_KEY = os.getenv("ALPACA_API_KEY")
+SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 
 
 if not API_KEY or not SECRET_KEY:
 
     print()
     print("=" * 70)
-    print(
-        "❌ ERROR: Alpaca API credentials are missing."
-    )
+    print("❌ ERROR: Alpaca API credentials are missing.")
     print("=" * 70)
     print()
 
-    print(
-        "Set these in your AlphaPilot .env file:"
-    )
-
+    print("Set these in your AlphaPilot .env file:")
     print()
-    print(
-        "ALPACA_API_KEY=YOUR_PAPER_API_KEY"
-    )
-
-    print(
-        "ALPACA_SECRET_KEY=YOUR_PAPER_SECRET_KEY"
-    )
-
+    print("ALPACA_API_KEY=YOUR_PAPER_API_KEY")
+    print("ALPACA_SECRET_KEY=YOUR_PAPER_SECRET_KEY")
     print()
 
     raise SystemExit(1)
@@ -156,14 +139,10 @@ def print_header():
 
     print()
     print("=" * 70)
-    print(
-        "🚀 AlphaPilot AI — Autonomous Exit Worker"
-    )
+    print("🚀 AlphaPilot AI — Autonomous Exit Worker")
     print("=" * 70)
 
-    print(
-        "Mode: ALPACA PAPER"
-    )
+    print("Mode: ALPACA PAPER")
 
     print(
         f"Check interval: "
@@ -180,24 +159,42 @@ def print_header():
         f"{TAKE_PROFIT_PCT * 100:.0f}%"
     )
 
-    print(
-        "Real fill confirmation: ENABLED"
-    )
-
-    print(
-        "Real P&L logging: ENABLED"
-    )
-
-    print(
-        "Trade State Integration: ENABLED"
-    )
-
-    print(
-        "Fake P&L: DISABLED"
-    )
+    print("Real fill confirmation: ENABLED")
+    print("Real P&L logging: ENABLED")
+    print("Trade State Integration: ENABLED")
+    print("Restart Reconciliation: ENABLED")
+    print("Fake P&L: DISABLED")
 
     print("=" * 70)
     print()
+
+
+# ============================================================
+# STATUS NORMALIZATION
+# ============================================================
+
+def normalize_order_status(order_status):
+    """
+    Convert Alpaca enum values such as:
+
+        OrderStatus.FILLED
+        OrderStatus.PARTIALLY_FILLED
+
+    into:
+
+        filled
+        partially_filled
+    """
+
+    raw_status = str(order_status).strip().lower()
+
+    # Handles enum representation:
+    # OrderStatus.FILLED
+    # ORDERSTATUS.FILLED
+    # filled
+    status = raw_status.split(".")[-1]
+
+    return status
 
 
 # ============================================================
@@ -208,11 +205,12 @@ def get_option_price(symbol):
     """
     Get latest option quote.
 
-    Uses:
+    Preferred price:
         midpoint = (bid + ask) / 2
 
-    Falls back to bid or ask if only one side
-    is available.
+    Fallback:
+        bid
+        ask
     """
 
     try:
@@ -223,9 +221,7 @@ def get_option_price(symbol):
 
         quotes = (
             option_data_client
-            .get_option_latest_quote(
-                request
-            )
+            .get_option_latest_quote(request)
         )
 
         quote = quotes.get(symbol)
@@ -243,9 +239,7 @@ def get_option_price(symbol):
 
         if bid > 0 and ask > 0:
 
-            return (
-                bid + ask
-            ) / 2
+            return (bid + ask) / 2
 
         if bid > 0:
             return bid
@@ -258,8 +252,7 @@ def get_option_price(symbol):
     except Exception as exc:
 
         print(
-            f"⚠️ Quote error for "
-            f"{symbol}: {exc}"
+            f"⚠️ Quote error for {symbol}: {exc}"
         )
 
         return None
@@ -281,8 +274,7 @@ def get_open_positions():
     except Exception as exc:
 
         print(
-            f"❌ Unable to read positions: "
-            f"{exc}"
+            f"❌ Unable to read positions: {exc}"
         )
 
         return []
@@ -312,6 +304,8 @@ def find_position(symbol):
 def has_active_sell_order(symbol):
     """
     Prevent duplicate SELL orders.
+
+    Returns True if an active SELL order already exists.
     """
 
     try:
@@ -319,6 +313,16 @@ def has_active_sell_order(symbol):
         orders = trading_client.get_orders(
             filter=None
         )
+
+        active_statuses = {
+            "new",
+            "accepted",
+            "pending_new",
+            "partially_filled",
+            "pending_replace",
+            "pending_cancel",
+            "calculated",
+        }
 
         for order in orders:
 
@@ -328,17 +332,11 @@ def has_active_sell_order(symbol):
             if order.side != OrderSide.SELL:
                 continue
 
-            status = str(
+            status = normalize_order_status(
                 order.status
-            ).lower()
+            )
 
-            if status in {
-                "new",
-                "accepted",
-                "pending_new",
-                "partially_filled",
-                "pending_replace",
-            }:
+            if status in active_statuses:
 
                 return True
 
@@ -347,11 +345,12 @@ def has_active_sell_order(symbol):
     except Exception as exc:
 
         print(
-            f"⚠️ Could not check active "
-            f"SELL orders: {exc}"
+            f"⚠️ Could not check active SELL orders: {exc}"
         )
 
-        # Fail safe.
+        # Fail safe:
+        # If we cannot determine whether a SELL
+        # already exists, do NOT submit another one.
         return True
 
 
@@ -361,8 +360,8 @@ def has_active_sell_order(symbol):
 
 def get_entry_price(position, state=None):
     """
-    Alpaca live position avg_entry_price is the
-    primary source of truth.
+    Alpaca live position average entry price is
+    the primary source of truth.
 
     trade_state.json is used as fallback.
     """
@@ -374,6 +373,7 @@ def get_entry_price(position, state=None):
         )
 
         if price > 0:
+
             return price
 
     except Exception:
@@ -391,6 +391,7 @@ def get_entry_price(position, state=None):
             )
 
             if price > 0:
+
                 return price
 
         except Exception:
@@ -460,50 +461,148 @@ def ensure_trade_history_file():
 
 
 # ============================================================
-# DUPLICATE TRADE PROTECTION
+# DUPLICATE COMPLETED TRADE CHECK
 # ============================================================
 
-def trade_already_logged(
+def completed_trade_already_logged(
     symbol,
-    entry_order_id=None,
+    quantity,
+    entry_price,
+    exit_price,
+    exit_time,
 ):
     """
-    Protect against duplicate completed-trade
-    records.
+    Prevent duplicate completed-trade rows.
 
-    IMPORTANT:
-    A previous trade with the same symbol should
-    NOT permanently block a future trade.
+    Uses the actual Alpaca fill timestamp when available.
 
-    Therefore this checks the active trade state's
-    entry order when available.
+    This is intentionally separate from active state protection.
     """
 
-    state = load_state()
+    ensure_trade_history_file()
 
-    if not state:
+    if not TRADE_HISTORY_FILE.exists():
         return False
 
-    if state.get("symbol") != symbol:
-        return False
+    target_symbol = str(symbol)
+    target_quantity = round(float(quantity), 4)
+    target_entry = round(float(entry_price), 4)
+    target_exit = round(float(exit_price), 4)
 
-    if entry_order_id:
+    target_exit_time = ""
 
-        if (
-            str(
-                state.get(
-                    "entry_order_id",
-                    "",
-                )
+    if exit_time:
+
+        target_exit_time = str(exit_time)
+
+        if "T" in target_exit_time:
+
+            target_exit_time = (
+                target_exit_time
+                .replace("T", " ")
             )
-            != str(entry_order_id)
-        ):
-            return False
 
-    return (
-        state.get("status")
-        == "EXIT_PENDING"
-    )
+        # Remove timezone suffix for comparison
+        if "+" in target_exit_time:
+
+            target_exit_time = (
+                target_exit_time
+                .split("+")[0]
+            )
+
+    try:
+
+        with open(
+            TRADE_HISTORY_FILE,
+            "r",
+            newline="",
+            encoding="utf-8",
+        ) as file:
+
+            reader = csv.DictReader(file)
+
+            for row in reader:
+
+                try:
+
+                    row_symbol = str(
+                        row.get("symbol", "")
+                    )
+
+                    row_quantity = round(
+                        float(
+                            row.get(
+                                "quantity",
+                                0,
+                            )
+                        ),
+                        4,
+                    )
+
+                    row_entry = round(
+                        float(
+                            row.get(
+                                "entry_price",
+                                0,
+                            )
+                        ),
+                        4,
+                    )
+
+                    row_exit = round(
+                        float(
+                            row.get(
+                                "exit_price",
+                                0,
+                            )
+                        ),
+                        4,
+                    )
+
+                    row_exit_time = str(
+                        row.get(
+                            "exit_time",
+                            "",
+                        )
+                    )
+
+                    if (
+                        row_symbol == target_symbol
+                        and row_quantity == target_quantity
+                        and row_entry == target_entry
+                        and row_exit == target_exit
+                    ):
+
+                        # If both timestamps are available,
+                        # require matching timestamp.
+                        if (
+                            target_exit_time
+                            and row_exit_time
+                        ):
+
+                            if (
+                                row_exit_time
+                                == target_exit_time
+                            ):
+
+                                return True
+
+                        else:
+
+                            return True
+
+                except Exception:
+                    continue
+
+        return False
+
+    except Exception as exc:
+
+        print(
+            f"⚠️ Could not inspect trade history: {exc}"
+        )
+
+        return False
 
 
 # ============================================================
@@ -514,19 +613,25 @@ def wait_for_fill(
     order_id,
     symbol,
 ):
+    """
+    Wait for REAL Alpaca SELL fill.
+
+    Important:
+        Alpaca SDK can return:
+            OrderStatus.FILLED
+
+        instead of:
+            filled
+
+    normalize_order_status() handles both.
+
+    After timeout, a final Alpaca reconciliation is performed.
+    """
 
     print()
-    print(
-        "⏳ Waiting for REAL SELL fill..."
-    )
-
-    print(
-        f"Order ID: {order_id}"
-    )
-
-    print(
-        f"Contract: {symbol}"
-    )
+    print("⏳ Waiting for REAL SELL fill...")
+    print(f"Order ID: {order_id}")
+    print(f"Contract: {symbol}")
 
     start_time = time.time()
 
@@ -544,9 +649,9 @@ def wait_for_fill(
                 )
             )
 
-            status = str(
+            status = normalize_order_status(
                 order.status
-            ).lower()
+            )
 
             print(
                 f"[{datetime.now().strftime('%H:%M:%S')}] "
@@ -578,14 +683,44 @@ def wait_for_fill(
                     else 0
                 )
 
+                filled_at = (
+                    str(order.filled_at)
+                    if order.filled_at
+                    else ""
+                )
+
+                print()
+                print(
+                    "✅ ALPACA CONFIRMED SELL FILLED"
+                )
+
+                print(
+                    f"Actual Fill Price: "
+                    f"${filled_price:.4f}"
+                    if filled_price
+                    else
+                    "Actual Fill Price: UNAVAILABLE"
+                )
+
+                print(
+                    f"Filled Quantity: "
+                    f"{filled_quantity}"
+                )
+
+                print(
+                    f"Filled At: "
+                    f"{filled_at or 'UNKNOWN'}"
+                )
+
                 return (
                     filled_price,
                     filled_quantity,
-                    status,
+                    filled_at,
+                    "filled",
                 )
 
             # ------------------------------------------------
-            # FAILED
+            # FINAL FAILURE
             # ------------------------------------------------
 
             if status in {
@@ -595,35 +730,151 @@ def wait_for_fill(
                 "suspended",
             }:
 
+                print()
+                print(
+                    f"❌ SELL ORDER FINAL STATUS: "
+                    f"{status.upper()}"
+                )
+
                 return (
                     None,
                     0,
+                    "",
                     status,
                 )
 
         except Exception as exc:
 
             print(
-                f"⚠️ Order status error: "
-                f"{exc}"
+                f"⚠️ Order status error: {exc}"
             )
 
         time.sleep(3)
 
+    # ========================================================
+    # FINAL RECONCILIATION
+    # ========================================================
+
     print()
     print(
-        "⏰ SELL fill confirmation timeout."
+        "⏰ SELL confirmation timeout reached."
     )
 
     print(
-        "No completed trade will be recorded."
+        "🔎 Performing final Alpaca order reconciliation..."
     )
 
-    return (
-        None,
-        0,
-        "timeout",
-    )
+    try:
+
+        final_order = (
+            trading_client
+            .get_order_by_id(
+                order_id
+            )
+        )
+
+        final_status = normalize_order_status(
+            final_order.status
+        )
+
+        print(
+            f"Final Alpaca status: "
+            f"{final_status.upper()}"
+        )
+
+        # ----------------------------------------------------
+        # ACTUALLY FILLED
+        # ----------------------------------------------------
+
+        if final_status == "filled":
+
+            filled_price = (
+                float(
+                    final_order.filled_avg_price
+                )
+                if final_order.filled_avg_price
+                else None
+            )
+
+            filled_quantity = (
+                int(
+                    float(
+                        final_order.filled_qty
+                    )
+                )
+                if final_order.filled_qty
+                else 0
+            )
+
+            filled_at = (
+                str(final_order.filled_at)
+                if final_order.filled_at
+                else ""
+            )
+
+            print()
+            print(
+                "✅ FINAL RECONCILIATION "
+                "CONFIRMED SELL FILLED"
+            )
+
+            print(
+                f"Actual Fill Price: "
+                f"${filled_price:.4f}"
+                if filled_price
+                else
+                "Actual Fill Price: UNAVAILABLE"
+            )
+
+            print(
+                f"Filled Quantity: "
+                f"{filled_quantity}"
+            )
+
+            print(
+                f"Filled At: "
+                f"{filled_at or 'UNKNOWN'}"
+            )
+
+            return (
+                filled_price,
+                filled_quantity,
+                filled_at,
+                "filled",
+            )
+
+        # ----------------------------------------------------
+        # STILL NOT FILLED
+        # ----------------------------------------------------
+
+        print()
+        print(
+            "⚠️ SELL WAS NOT CONFIRMED FILLED."
+        )
+
+        print(
+            "No completed trade will be recorded."
+        )
+
+        return (
+            None,
+            0,
+            "",
+            final_status,
+        )
+
+    except Exception as exc:
+
+        print(
+            f"❌ Final order reconciliation failed: {exc}"
+        )
+
+        return (
+            None,
+            0,
+            "",
+            "timeout",
+        )
 
 
 # ============================================================
@@ -637,6 +888,7 @@ def log_completed_trade(
     exit_price,
     reason,
     entry_time="",
+    exit_time="",
 ):
     """
     Write completed trade ONLY after a REAL
@@ -644,6 +896,10 @@ def log_completed_trade(
     """
 
     ensure_trade_history_file()
+
+    quantity = float(quantity)
+    entry_price = float(entry_price)
+    exit_price = float(exit_price)
 
     entry_value = (
         entry_price
@@ -673,12 +929,33 @@ def log_completed_trade(
 
         pnl_percent = 0.0
 
-    exit_time = (
-        datetime.now()
-        .strftime(
-            "%Y-%m-%d %H:%M:%S"
+    if not exit_time:
+
+        exit_time = (
+            datetime.now()
+            .strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
         )
-    )
+
+    else:
+
+        exit_time = str(exit_time)
+
+        if "T" in exit_time:
+
+            exit_time = (
+                exit_time
+                .replace("T", " ")
+            )
+
+        # Remove timezone suffix.
+        if "+" in exit_time:
+
+            exit_time = (
+                exit_time
+                .split("+")[0]
+            )
 
     with open(
         TRADE_HISTORY_FILE,
@@ -693,30 +970,12 @@ def log_completed_trade(
             [
                 symbol,
                 quantity,
-                round(
-                    entry_price,
-                    4,
-                ),
-                round(
-                    exit_price,
-                    4,
-                ),
-                round(
-                    entry_value,
-                    2,
-                ),
-                round(
-                    exit_value,
-                    2,
-                ),
-                round(
-                    pnl,
-                    2,
-                ),
-                round(
-                    pnl_percent,
-                    2,
-                ),
+                round(entry_price, 4),
+                round(exit_price, 4),
+                round(entry_value, 2),
+                round(exit_value, 2),
+                round(pnl, 2),
+                round(pnl_percent, 2),
                 entry_time,
                 exit_time,
                 reason,
@@ -725,9 +984,7 @@ def log_completed_trade(
 
     print()
     print("=" * 70)
-    print(
-        "✅ REALIZED PAPER TRADE SAVED"
-    )
+    print("✅ REALIZED PAPER TRADE SAVED")
     print("=" * 70)
 
     print(
@@ -735,7 +992,7 @@ def log_completed_trade(
     )
 
     print(
-        f"Quantity:       {quantity}"
+        f"Quantity:       {quantity:g}"
     )
 
     print(
@@ -792,8 +1049,8 @@ def bootstrap_state_from_position(
 
     This does NOT create a fake trade.
 
-    It only records the currently observed live
-    Alpaca position so the Exit Worker can manage it.
+    It only registers the currently observed live
+    Alpaca position.
     """
 
     state = load_state()
@@ -813,9 +1070,11 @@ def bootstrap_state_from_position(
     )
 
     if quantity <= 0:
+
         return {}
 
     if entry_price <= 0:
+
         return {}
 
     try:
@@ -840,23 +1099,19 @@ def bootstrap_state_from_position(
 
         print()
         print(
-            "💾 EXISTING ALPACA POSITION "
-            "REGISTERED"
+            "💾 EXISTING ALPACA POSITION REGISTERED"
         )
 
         print(
-            f"Contract: "
-            f"{symbol}"
+            f"Contract: {symbol}"
         )
 
         print(
-            f"Quantity: "
-            f"{quantity}"
+            f"Quantity: {quantity}"
         )
 
         print(
-            f"Entry Price: "
-            f"${entry_price:.2f}"
+            f"Entry Price: ${entry_price:.2f}"
         )
 
         print(
@@ -874,11 +1129,354 @@ def bootstrap_state_from_position(
     except Exception as exc:
 
         print(
-            f"⚠️ Could not bootstrap "
-            f"trade state: {exc}"
+            f"⚠️ Could not bootstrap trade state: {exc}"
         )
 
         return {}
+
+
+# ============================================================
+# RECONCILE SAVED EXIT ORDER
+# ============================================================
+
+def reconcile_exit_order():
+    """
+    Reconcile an EXIT_PENDING SELL order after:
+        - worker restart
+        - timeout
+        - crash
+        - temporary API issue
+
+    Only an actual Alpaca FILLED order can create
+    a completed trade record.
+    """
+
+    state = load_state()
+
+    if not state:
+
+        return False
+
+    exit_order_id = state.get(
+        "exit_order_id"
+    )
+
+    if not exit_order_id:
+
+        return False
+
+    status_from_state = str(
+        state.get(
+            "status",
+            ""
+        )
+    ).upper()
+
+    print()
+    print("=" * 70)
+    print("🔎 EXIT ORDER RECONCILIATION")
+    print("=" * 70)
+
+    print(
+        f"Order ID: {exit_order_id}"
+    )
+
+    print(
+        f"State status: {status_from_state}"
+    )
+
+    try:
+
+        order = (
+            trading_client
+            .get_order_by_id(
+                exit_order_id
+            )
+        )
+
+        status = normalize_order_status(
+            order.status
+        )
+
+        print(
+            f"Alpaca status: {status.upper()}"
+        )
+
+        # ----------------------------------------------------
+        # REAL FILLED
+        # ----------------------------------------------------
+
+        if status == "filled":
+
+            filled_price = (
+                float(
+                    order.filled_avg_price
+                )
+                if order.filled_avg_price
+                else 0.0
+            )
+
+            filled_quantity = (
+                int(
+                    float(
+                        order.filled_qty
+                    )
+                )
+                if order.filled_qty
+                else 0
+            )
+
+            filled_at = (
+                str(order.filled_at)
+                if order.filled_at
+                else ""
+            )
+
+            if filled_price <= 0:
+
+                print(
+                    "❌ FILLED order has no valid "
+                    "average fill price."
+                )
+
+                print(
+                    "Trade will NOT be recorded."
+                )
+
+                return False
+
+            if filled_quantity <= 0:
+
+                print(
+                    "❌ FILLED order has invalid quantity."
+                )
+
+                print(
+                    "Trade will NOT be recorded."
+                )
+
+                return False
+
+            symbol = state.get(
+                "symbol",
+                order.symbol,
+            )
+
+            entry_price = float(
+                state.get(
+                    "entry_price",
+                    0,
+                )
+            )
+
+            entry_time = state.get(
+                "entry_time",
+                "",
+            )
+
+            if entry_price <= 0:
+
+                print(
+                    "❌ State has invalid entry price."
+                )
+
+                print(
+                    "Trade will NOT be recorded."
+                )
+
+                return False
+
+            # ------------------------------------------------
+            # DUPLICATE PROTECTION
+            # ------------------------------------------------
+
+            if completed_trade_already_logged(
+                symbol=symbol,
+                quantity=filled_quantity,
+                entry_price=entry_price,
+                exit_price=filled_price,
+                exit_time=filled_at,
+            ):
+
+                print()
+                print(
+                    "⚠️ Trade already exists "
+                    "in trade_history.csv."
+                )
+
+                print(
+                    "No duplicate row will be added."
+                )
+
+                clear_state()
+
+                print(
+                    "🧹 Stale trade state cleared."
+                )
+
+                return True
+
+            # ------------------------------------------------
+            # REAL P&L
+            # ------------------------------------------------
+
+            entry_value = (
+                entry_price
+                * filled_quantity
+                * OPTIONS_MULTIPLIER
+            )
+
+            exit_value = (
+                filled_price
+                * filled_quantity
+                * OPTIONS_MULTIPLIER
+            )
+
+            pnl = (
+                exit_value
+                - entry_value
+            )
+
+            pnl_percent = (
+                (
+                    pnl
+                    / entry_value
+                )
+                * 100
+                if entry_value
+                else 0.0
+            )
+
+            print()
+            print(
+                "✅ REAL SELL FILL CONFIRMED"
+            )
+
+            print(
+                f"Symbol:        {symbol}"
+            )
+
+            print(
+                f"Filled Qty:    {filled_quantity}"
+            )
+
+            print(
+                f"Entry Price:   ${entry_price:.2f}"
+            )
+
+            print(
+                f"Exit Price:    ${filled_price:.2f}"
+            )
+
+            print(
+                f"Real P&L:      ${pnl:,.2f}"
+            )
+
+            print(
+                f"Return:        {pnl_percent:.2f}%"
+            )
+
+            print(
+                f"Filled At:     {filled_at or 'UNKNOWN'}"
+            )
+
+            # ------------------------------------------------
+            # SAVE REAL TRADE
+            # ------------------------------------------------
+
+            log_completed_trade(
+                symbol=symbol,
+                quantity=filled_quantity,
+                entry_price=entry_price,
+                exit_price=filled_price,
+                reason="STOP LOSS",
+                entry_time=entry_time,
+                exit_time=filled_at,
+            )
+
+            # ------------------------------------------------
+            # CLEAR STATE ONLY AFTER LOGGING
+            # ------------------------------------------------
+
+            clear_state()
+
+            print()
+            print(
+                "🧹 Trade state cleared."
+            )
+
+            print(
+                "✅ EXIT RECONCILIATION COMPLETE."
+            )
+
+            return True
+
+        # ----------------------------------------------------
+        # FINAL FAILED ORDER
+        # ----------------------------------------------------
+
+        if status in {
+            "canceled",
+            "expired",
+            "rejected",
+            "suspended",
+        }:
+
+            print()
+            print(
+                f"⚠️ EXIT ORDER IS {status.upper()}."
+            )
+
+            # If position still exists, it can safely
+            # return to OPEN and be evaluated again.
+            live_position = find_position(
+                state.get("symbol", "")
+            )
+
+            if live_position:
+
+                mark_exit_open()
+
+                print(
+                    "Trade state returned to OPEN."
+                )
+
+            else:
+
+                print(
+                    "⚠️ No live position exists, "
+                    "but SELL was not confirmed filled."
+                )
+
+                print(
+                    "State will NOT be silently cleared."
+                )
+
+            return False
+
+        # ----------------------------------------------------
+        # STILL ACTIVE
+        # ----------------------------------------------------
+
+        print()
+        print(
+            "⏳ Exit order is still active."
+        )
+
+        print(
+            "EXIT_PENDING state will be preserved."
+        )
+
+        return False
+
+    except Exception as exc:
+
+        print()
+        print(
+            f"❌ Exit reconciliation failed: {exc}"
+        )
+
+        return False
 
 
 # ============================================================
@@ -891,30 +1489,17 @@ def execute_exit(
     reason,
 ):
     """
-    Submit REAL PAPER SELL.
-
-    Completed trade is recorded ONLY after
-    Alpaca confirms SELL = FILLED.
+    Submit REAL Alpaca PAPER SELL order and wait
+    for actual fill confirmation.
     """
 
     symbol = position.symbol
 
-    state = load_state()
-
-    if (
-        not state
-        or state.get("symbol") != symbol
-    ):
-
-        state = (
-            bootstrap_state_from_position(
-                position
-            )
-        )
-
     quantity = get_position_quantity(
         position
     )
+
+    state = load_state()
 
     entry_price = get_entry_price(
         position,
@@ -924,26 +1509,22 @@ def execute_exit(
     if quantity <= 0:
 
         print(
-            f"⚠️ Invalid quantity "
-            f"for {symbol}"
+            f"❌ Invalid exit quantity for {symbol}"
         )
 
-        return
+        return False
 
     if entry_price <= 0:
 
         print(
-            f"⚠️ Invalid entry price "
-            f"for {symbol}"
+            f"❌ Invalid entry price for {symbol}"
         )
 
-        return
+        return False
 
     print()
     print("=" * 70)
-    print(
-        "🚨 EXIT EXECUTION"
-    )
+    print("🚀 EXIT EXECUTION")
     print("=" * 70)
 
     print(
@@ -966,7 +1547,41 @@ def execute_exit(
         f"Reason:         {reason}"
     )
 
+    print(
+        "Mode:            ALPACA PAPER"
+    )
+
     print("=" * 70)
+
+    # --------------------------------------------------------
+    # EXISTING EXIT PENDING
+    # --------------------------------------------------------
+
+    if state:
+
+        state_symbol = state.get(
+            "symbol"
+        )
+
+        state_status = state.get(
+            "status"
+        )
+
+        if (
+            state_symbol == symbol
+            and state_status == "EXIT_PENDING"
+        ):
+
+            print()
+            print(
+                "⏳ EXIT ALREADY PENDING."
+            )
+
+            print(
+                "Duplicate SELL prevented."
+            )
+
+            return False
 
     # --------------------------------------------------------
     # ACTIVE SELL PROTECTION
@@ -983,7 +1598,7 @@ def execute_exit(
             "Duplicate SELL prevented."
         )
 
-        return
+        return False
 
     # --------------------------------------------------------
     # MARKET STATUS
@@ -1015,20 +1630,19 @@ def execute_exit(
                 "Worker will retry automatically."
             )
 
-            return
+            return False
 
     except Exception as exc:
 
         print()
         print(
-            f"⚠️ Could not verify market "
-            f"status: {exc}"
+            f"⚠️ Could not verify market status: {exc}"
         )
 
-        return
+        return False
 
     # --------------------------------------------------------
-    # SUBMIT SELL
+    # SUBMIT REAL PAPER SELL
     # --------------------------------------------------------
 
     try:
@@ -1049,34 +1663,12 @@ def execute_exit(
 
         print()
         print(
-            "🚀 REAL PAPER SELL "
-            "ORDER SUBMITTED"
+            "🚀 REAL PAPER SELL ORDER SUBMITTED"
         )
 
         print(
             f"Order ID: {order.id}"
         )
-
-        # ----------------------------------------------------
-        # SAVE EXIT PENDING STATE
-        # ----------------------------------------------------
-
-        try:
-
-            mark_exit_pending(
-                order.id
-            )
-
-            print(
-                "💾 Exit order state saved."
-            )
-
-        except Exception as exc:
-
-            print(
-                f"⚠️ Could not save exit "
-                f"state: {exc}"
-            )
 
     except Exception as exc:
 
@@ -1087,7 +1679,38 @@ def execute_exit(
 
         print(exc)
 
-        return
+        return False
+
+    # --------------------------------------------------------
+    # SAVE EXIT PENDING STATE
+    # --------------------------------------------------------
+
+    try:
+
+        mark_exit_pending(
+            order.id
+        )
+
+        print(
+            "💾 Exit order state saved."
+        )
+
+    except Exception as exc:
+
+        print()
+        print(
+            f"⚠️ Could not save exit state: {exc}"
+        )
+
+        print(
+            "⚠️ SAFETY STOP:"
+        )
+
+        print(
+            "Do NOT submit another SELL manually."
+        )
+
+        return False
 
     # --------------------------------------------------------
     # WAIT FOR REAL FILL
@@ -1096,6 +1719,7 @@ def execute_exit(
     (
         filled_price,
         filled_quantity,
+        filled_at,
         status,
     ) = wait_for_fill(
         order.id,
@@ -1103,14 +1727,14 @@ def execute_exit(
     )
 
     # --------------------------------------------------------
-    # SELL NOT FILLED
+    # SELL NOT CONFIRMED FILLED
     # --------------------------------------------------------
 
     if status != "filled":
 
         print()
         print(
-            "⚠️ SELL WAS NOT CONFIRMED FILLED"
+            "⚠️ SELL WAS NOT CONFIRMED FILLED."
         )
 
         print(
@@ -1121,68 +1745,136 @@ def execute_exit(
             "No completed trade recorded."
         )
 
-        # If order failed/canceled, return state
-        # to OPEN so another exit can be attempted.
+        # ----------------------------------------------------
+        # ACTIVE / TIMEOUT
+        # ----------------------------------------------------
+
+        if status in {
+            "timeout",
+            "new",
+            "accepted",
+            "pending_new",
+            "partially_filled",
+            "pending_replace",
+            "pending_cancel",
+            "calculated",
+        }:
+
+            print()
+            print(
+                "⏳ SELL order may still be active."
+            )
+
+            print(
+                "EXIT_PENDING state preserved."
+            )
+
+            print(
+                "Duplicate SELL protection remains active."
+            )
+
+            return False
+
+        # ----------------------------------------------------
+        # FINAL FAILURE
+        # ----------------------------------------------------
+
         if status in {
             "canceled",
             "expired",
             "rejected",
             "suspended",
-            "timeout",
         }:
 
             try:
 
-                mark_exit_open()
-
-                print(
-                    "Trade state returned to OPEN."
+                live_position = find_position(
+                    symbol
                 )
+
+                if live_position:
+
+                    mark_exit_open()
+
+                    print(
+                        "Trade state returned to OPEN."
+                    )
+
+                else:
+
+                    print()
+                    print(
+                        "⚠️ No live position found."
+                    )
+
+                    print(
+                        "SELL was not confirmed FILLED."
+                    )
+
+                    print(
+                        "State was NOT silently cleared."
+                    )
 
             except Exception as exc:
 
                 print(
-                    f"⚠️ Could not restore "
-                    f"trade state: {exc}"
+                    f"⚠️ Could not restore state: {exc}"
                 )
 
-        return
+            return False
+
+        return False
 
     # --------------------------------------------------------
-    # VALIDATE REAL FILL
+    # VALIDATE REAL FILL PRICE
     # --------------------------------------------------------
 
-    if not filled_price:
+    if filled_price is None:
 
         print()
         print(
             "❌ Alpaca reported FILLED "
-            "but no filled average price "
-            "was returned."
+            "but no fill price was returned."
         )
 
         print(
             "P&L will NOT be calculated."
         )
 
-        return
+        return False
+
+    if filled_price <= 0:
+
+        print()
+        print(
+            "❌ Invalid Alpaca fill price."
+        )
+
+        print(
+            "P&L will NOT be calculated."
+        )
+
+        return False
+
+    # --------------------------------------------------------
+    # VALIDATE REAL FILL QUANTITY
+    # --------------------------------------------------------
 
     if filled_quantity <= 0:
 
         print()
         print(
-            "❌ Alpaca reported FILLED "
-            "but quantity is invalid."
+            "❌ Invalid Alpaca filled quantity."
         )
 
         print(
             "P&L will NOT be calculated."
         )
 
-        return
+        return False
 
     # --------------------------------------------------------
-    # GET ENTRY TIME FROM STATE
+    # LOAD CURRENT STATE
     # --------------------------------------------------------
 
     state = load_state()
@@ -1197,6 +1889,43 @@ def execute_exit(
         )
 
     # --------------------------------------------------------
+    # DUPLICATE PROTECTION
+    # --------------------------------------------------------
+
+    if completed_trade_already_logged(
+        symbol=symbol,
+        quantity=filled_quantity,
+        entry_price=entry_price,
+        exit_price=filled_price,
+        exit_time=filled_at,
+    ):
+
+        print()
+        print(
+            "⚠️ Completed trade already exists."
+        )
+
+        print(
+            "No duplicate history row created."
+        )
+
+        try:
+
+            clear_state()
+
+            print(
+                "🧹 Trade state cleared."
+            )
+
+        except Exception as exc:
+
+            print(
+                f"⚠️ Could not clear state: {exc}"
+            )
+
+        return True
+
+    # --------------------------------------------------------
     # SAVE REAL COMPLETED TRADE
     # --------------------------------------------------------
 
@@ -1207,17 +1936,18 @@ def execute_exit(
         exit_price=filled_price,
         reason=reason,
         entry_time=entry_time,
+        exit_time=filled_at,
     )
 
     # --------------------------------------------------------
-    # CLEAR STATE ONLY AFTER SUCCESSFUL
-    # TRADE LOGGING
+    # CLEAR STATE ONLY AFTER SUCCESSFUL LOGGING
     # --------------------------------------------------------
 
     try:
 
         clear_state()
 
+        print()
         print(
             "🧹 Trade state cleared."
         )
@@ -1228,11 +1958,15 @@ def execute_exit(
 
     except Exception as exc:
 
+        print()
         print(
-            f"⚠️ Trade was completed but "
-            f"state could not be cleared: "
-            f"{exc}"
+            "⚠️ Trade was completed but "
+            "state could not be cleared:"
         )
+
+        print(exc)
+
+    return True
 
 
 # ============================================================
@@ -1243,7 +1977,7 @@ def monitor_position(
     position,
 ):
     """
-    Monitor one open option position.
+    Monitor one open SPY option position.
     """
 
     symbol = position.symbol
@@ -1269,20 +2003,27 @@ def monitor_position(
             )
         )
 
+    if not state:
+
+        print(
+            f"⚠️ Could not create state for {symbol}"
+        )
+
+        return
+
     # --------------------------------------------------------
     # EXIT PENDING
     # --------------------------------------------------------
 
     if state.get("status") == "EXIT_PENDING":
 
+        print()
         print(
-            f"⏳ {symbol} has an "
-            f"EXIT_PENDING order."
+            f"⏳ {symbol} has an EXIT_PENDING order."
         )
 
         print(
-            "Waiting for Alpaca order "
-            "completion."
+            "Waiting for Alpaca order completion."
         )
 
         return
@@ -1299,8 +2040,7 @@ def monitor_position(
     if quantity <= 0:
 
         print(
-            f"⚠️ Invalid quantity: "
-            f"{symbol}"
+            f"⚠️ Invalid quantity: {symbol}"
         )
 
         return
@@ -1308,8 +2048,7 @@ def monitor_position(
     if entry_price <= 0:
 
         print(
-            f"⚠️ Invalid entry price: "
-            f"{symbol}"
+            f"⚠️ Invalid entry price: {symbol}"
         )
 
         return
@@ -1325,8 +2064,7 @@ def monitor_position(
     if current_price is None:
 
         print(
-            f"⚠️ No current quote "
-            f"available for {symbol}"
+            f"⚠️ No current quote available for {symbol}"
         )
 
         return
@@ -1371,8 +2109,7 @@ def monitor_position(
 
         print()
         print(
-            f"🛑 STOP LOSS TRIGGERED: "
-            f"{symbol}"
+            f"🛑 STOP LOSS TRIGGERED: {symbol}"
         )
 
         execute_exit(
@@ -1391,8 +2128,7 @@ def monitor_position(
 
         print()
         print(
-            f"🎯 TAKE PROFIT TRIGGERED: "
-            f"{symbol}"
+            f"🎯 TAKE PROFIT TRIGGERED: {symbol}"
         )
 
         execute_exit(
@@ -1402,6 +2138,51 @@ def monitor_position(
         )
 
         return
+
+
+# ============================================================
+# RECONCILE STATE BEFORE POSITION MONITORING
+# ============================================================
+
+def reconcile_state_before_monitoring():
+    """
+    Check whether a saved EXIT_PENDING order was completed
+    while the worker was stopped/restarting.
+
+    This is called before reading live positions.
+    """
+
+    state = load_state()
+
+    if not state:
+
+        return False
+
+    exit_order_id = state.get(
+        "exit_order_id"
+    )
+
+    if not exit_order_id:
+
+        return False
+
+    status = state.get(
+        "status"
+    )
+
+    if status not in {
+        "EXIT_PENDING",
+        "OPEN",
+    }:
+
+        return False
+
+    print()
+    print(
+        "🔄 Saved exit order detected."
+    )
+
+    return reconcile_exit_order()
 
 
 # ============================================================
@@ -1424,10 +2205,24 @@ def run_worker():
         print()
         print("=" * 70)
         print(
-            f"[{timestamp}] 🔄 "
-            f"CHECKING POSITIONS"
+            f"[{timestamp}] 🔄 CHECKING POSITIONS"
         )
         print("=" * 70)
+
+        # ----------------------------------------------------
+        # FIRST: RECONCILE SAVED EXIT
+        # ----------------------------------------------------
+
+        try:
+
+            reconcile_state_before_monitoring()
+
+        except Exception as exc:
+
+            print()
+            print(
+                f"⚠️ Startup reconciliation error: {exc}"
+            )
 
         # ----------------------------------------------------
         # MARKET STATUS
@@ -1455,8 +2250,7 @@ def run_worker():
         except Exception as exc:
 
             print(
-                f"⚠️ Market status error: "
-                f"{exc}"
+                f"⚠️ Market status error: {exc}"
             )
 
         # ----------------------------------------------------
@@ -1472,12 +2266,49 @@ def run_worker():
                 "📭 No open positions."
             )
 
+            # ------------------------------------------------
+            # IMPORTANT:
+            # If there is no live position but a saved
+            # exit order exists, attempt reconciliation.
+            # ------------------------------------------------
+
+            state = load_state()
+
+            if state:
+
+                if state.get(
+                    "exit_order_id"
+                ):
+
+                    print()
+                    print(
+                        "🔎 No live position, "
+                        "but saved exit order exists."
+                    )
+
+                    reconcile_exit_order()
+
+                else:
+
+                    if state.get(
+                        "status"
+                    ) == "OPEN":
+
+                        print()
+                        print(
+                            "⚠️ Local state says OPEN "
+                            "but Alpaca has no open position."
+                        )
+
+                        print(
+                            "No automatic state deletion performed."
+                        )
+
         else:
 
             print()
             print(
-                f"📊 Open positions: "
-                f"{len(positions)}"
+                f"📊 Open positions: {len(positions)}"
             )
 
             for position in positions:
@@ -1485,7 +2316,7 @@ def run_worker():
                 try:
 
                     # Only manage SPY options
-                    # for this AlphaPilot strategy.
+                    # for this strategy.
                     if not position.symbol.startswith(
                         "SPY"
                     ):
@@ -1500,8 +2331,7 @@ def run_worker():
 
                     print(
                         f"❌ Position error "
-                        f"{position.symbol}: "
-                        f"{exc}"
+                        f"{position.symbol}: {exc}"
                     )
 
         print()
