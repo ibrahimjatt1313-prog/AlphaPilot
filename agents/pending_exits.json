@@ -1,0 +1,10 @@
+{
+    "SPY260904C00772000": {
+        "symbol": "SPY260904C00772000",
+        "quantity": 3,
+        "entry_price": 0.8,
+        "last_price": 0.42500000000000004,
+        "reason": "STOP LOSS",
+        "detected_at": "2026-09-02T04:49:05.882483+00:00"
+    }
+}
