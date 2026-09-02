@@ -60,3 +60,5 @@ tempCodeRunnerFile.py
 
 # PyInstaller
 *.spec
+
+agents/trade_state.json
