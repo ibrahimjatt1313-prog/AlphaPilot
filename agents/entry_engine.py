@@ -1,4 +1,3 @@
-
 """
 AlphaPilot AI — Autonomous Options Entry Worker
 
@@ -22,16 +21,24 @@ Flow:
     PAPER BUY
         ↓
     Real fill confirmation
+        ↓
+    Save REAL trade state
+        ↓
+    Autonomous Exit Worker
 
 No fake trades.
 No fake fills.
-Trade history is updated only after Alpaca confirms FILLED.
+No fake P&L.
+
+Trade state is created ONLY after Alpaca confirms BUY = FILLED.
+Completed trade history is created by the Exit Worker ONLY after
+Alpaca confirms SELL = FILLED.
 """
 
 import csv
 import os
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 
 from alpaca.data.historical import StockHistoricalDataClient
@@ -53,6 +60,11 @@ from alpaca.trading.enums import (
     TimeInForce,
 )
 
+from agents.trade_state import (
+    create_open_trade,
+    is_open,
+)
+
 
 # ============================================================
 # CONFIG
@@ -66,24 +78,29 @@ TRADE_HISTORY_FILE = (
 
 SYMBOL = "SPY"
 
+# AI
 CONFIDENCE_THRESHOLD = 70
 
+# Options
 MIN_DTE = 7
 MAX_DTE = 30
-
 MAX_STRIKE_DISTANCE = 15.0
-
 MIN_OPEN_INTEREST = 100
 
+# Risk
 MAX_ACCOUNT_RISK_PCT = 0.01
 MAX_ACCOUNT_EXPOSURE_PCT = 0.05
 
+# Maximum number of contracts per trade
 MAX_CONTRACTS = 1
 
+# Worker
 CHECK_INTERVAL = 60
 
+# Options multiplier
 OPTIONS_MULTIPLIER = 100
 
+# Paper only
 PAPER_TRADING = True
 
 
@@ -99,6 +116,10 @@ try:
 except Exception:
     pass
 
+
+# ============================================================
+# CREDENTIALS
+# ============================================================
 
 API_KEY = os.getenv("ALPACA_API_KEY")
 SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
@@ -116,6 +137,7 @@ if not API_KEY or not SECRET_KEY:
     print("ALPACA_API_KEY=YOUR_PAPER_API_KEY")
     print("ALPACA_SECRET_KEY=YOUR_PAPER_SECRET_KEY")
     print()
+
     raise SystemExit(1)
 
 
@@ -150,27 +172,50 @@ def print_header():
     print("=" * 70)
     print("🚀 AlphaPilot AI — Autonomous Entry Worker")
     print("=" * 70)
+
     print("Mode: ALPACA PAPER")
     print(f"Symbol: {SYMBOL}")
-    print(f"AI Confidence Threshold: {CONFIDENCE_THRESHOLD}%")
-    print(f"Option DTE: {MIN_DTE}–{MAX_DTE} days")
+
     print(
-        f"Max Strike Distance: ${MAX_STRIKE_DISTANCE:.2f}"
+        f"AI Confidence Threshold: "
+        f"{CONFIDENCE_THRESHOLD}%"
     )
+
     print(
-        f"Minimum Open Interest: {MIN_OPEN_INTEREST}"
+        f"Option DTE: "
+        f"{MIN_DTE}–{MAX_DTE} days"
     )
+
+    print(
+        f"Max Strike Distance: "
+        f"${MAX_STRIKE_DISTANCE:.2f}"
+    )
+
+    print(
+        f"Minimum Open Interest: "
+        f"{MIN_OPEN_INTEREST}"
+    )
+
     print(
         f"Max Account Risk: "
         f"{MAX_ACCOUNT_RISK_PCT * 100:.1f}%"
     )
+
     print(
         f"Max Exposure: "
         f"{MAX_ACCOUNT_EXPOSURE_PCT * 100:.1f}%"
     )
-    print("Maximum Contracts: 1")
+
+    print(
+        f"Maximum Contracts: "
+        f"{MAX_CONTRACTS}"
+    )
+
     print("Paper BUY: ENABLED")
     print("Real Fill Confirmation: ENABLED")
+    print("Trade State Persistence: ENABLED")
+    print("Fake Trades: DISABLED")
+
     print("=" * 70)
     print()
 
@@ -197,16 +242,18 @@ def calculate_rsi(values, period=14):
 
     for i in range(
         len(values) - period,
-        len(values)
+        len(values),
     ):
 
         change = values[i] - values[i - 1]
 
         if change > 0:
+
             gains.append(change)
             losses.append(0)
 
         else:
+
             gains.append(0)
             losses.append(abs(change))
 
@@ -247,15 +294,26 @@ def calculate_macd(values):
     if len(values) < 35:
         return None, None
 
-    ema12 = calculate_ema(values, 12)
-    ema26 = calculate_ema(values, 26)
+    ema12 = calculate_ema(
+        values,
+        12,
+    )
+
+    ema26 = calculate_ema(
+        values,
+        26,
+    )
 
     if ema12 is None or ema26 is None:
         return None, None
 
     macd = ema12 - ema26
 
-    return macd, 0.0
+    # Current AlphaPilot strategy uses zero
+    # as the bullish MACD baseline.
+    signal = 0.0
+
+    return macd, signal
 
 
 # ============================================================
@@ -277,7 +335,10 @@ def get_spy_data():
             request
         )
 
-        data = bars.data.get(SYMBOL, [])
+        data = bars.data.get(
+            SYMBOL,
+            [],
+        )
 
         if len(data) < 50:
 
@@ -301,25 +362,27 @@ def get_spy_data():
 
         sma20 = calculate_sma(
             closes,
-            20
+            20,
         )
 
         sma50 = calculate_sma(
             closes,
-            50
+            50,
         )
 
         rsi = calculate_rsi(
-            closes
+            closes,
         )
 
         macd, signal = calculate_macd(
-            closes
+            closes,
         )
 
+        recent_volumes = volumes[-20:]
+
         average_volume = (
-            sum(volumes[-20:])
-            / min(20, len(volumes[-20:]))
+            sum(recent_volumes)
+            / len(recent_volumes)
         )
 
         current_volume = volumes[-1]
@@ -362,7 +425,8 @@ def generate_signal(data):
     # --------------------------------------------------------
 
     price_above_sma20 = (
-        data["price"] > data["sma20"]
+        data["price"]
+        > data["sma20"]
     )
 
     conditions.append(
@@ -374,7 +438,8 @@ def generate_signal(data):
     # --------------------------------------------------------
 
     bullish_trend = (
-        data["sma20"] > data["sma50"]
+        data["sma20"]
+        > data["sma50"]
     )
 
     conditions.append(
@@ -416,7 +481,8 @@ def generate_signal(data):
     )
 
     passed = sum(
-        1 for condition in conditions
+        1
+        for condition in conditions
         if condition
     )
 
@@ -443,26 +509,33 @@ def generate_signal(data):
 # DISPLAY AI DECISION
 # ============================================================
 
-def print_ai_decision(data, decision):
+def print_ai_decision(
+    data,
+    decision,
+):
 
     print()
     print("🧠 LIVE AI DECISION")
     print("-" * 70)
 
     print(
-        f"SPY Price:       ${data['price']:.2f}"
+        f"SPY Price:       "
+        f"${data['price']:.2f}"
     )
 
     print(
-        f"SMA20:           ${data['sma20']:.2f}"
+        f"SMA20:           "
+        f"${data['sma20']:.2f}"
     )
 
     print(
-        f"SMA50:           ${data['sma50']:.2f}"
+        f"SMA50:           "
+        f"${data['sma50']:.2f}"
     )
 
     print(
-        f"RSI:             {data['rsi']:.2f}"
+        f"RSI:             "
+        f"{data['rsi']:.2f}"
     )
 
     print(
@@ -476,6 +549,7 @@ def print_ai_decision(data, decision):
     )
 
     print()
+
     print(
         f"Conditions: "
         f"{decision['passed']}/"
@@ -499,42 +573,27 @@ def print_ai_decision(data, decision):
 # POSITION PROTECTION
 # ============================================================
 
-def has_open_spy_position():
-
-    try:
-
-        positions = trading_client.get_all_positions()
-
-        for position in positions:
-
-            if position.symbol == SYMBOL:
-                return True
-
-            if position.symbol.startswith(
-                "SPY"
-            ):
-                return True
-
-        return False
-
-    except Exception as exc:
-
-        print(
-            f"⚠️ Position check error: {exc}"
-        )
-
-        return True
-
-
 def has_open_option_position():
 
     try:
 
-        positions = trading_client.get_all_positions()
+        positions = (
+            trading_client
+            .get_all_positions()
+        )
 
         for position in positions:
 
-            if position.symbol.startswith("SPY"):
+            symbol = str(
+                position.symbol
+            )
+
+            if symbol.startswith("SPY"):
+
+                print(
+                    f"⚠️ Existing SPY position: "
+                    f"{symbol}"
+                )
 
                 return True
 
@@ -543,29 +602,82 @@ def has_open_option_position():
     except Exception as exc:
 
         print(
-            f"⚠️ Option position check error: {exc}"
+            f"⚠️ Option position check error: "
+            f"{exc}"
         )
 
+        # Fail safe:
+        # if we cannot verify positions,
+        # do not enter.
         return True
 
 
 # ============================================================
-# ACCOUNT RISK
+# TRADE STATE PROTECTION
+# ============================================================
+
+def has_saved_trade_state():
+
+    try:
+
+        if is_open():
+
+            print()
+            print(
+                "🛑 ENTRY BLOCKED"
+            )
+
+            print(
+                "An AlphaPilot trade state "
+                "is already OPEN."
+            )
+
+            print(
+                "Waiting for Exit Worker "
+                "to complete the lifecycle."
+            )
+
+            return True
+
+        return False
+
+    except Exception as exc:
+
+        print(
+            f"⚠️ Trade state check error: "
+            f"{exc}"
+        )
+
+        # Fail safe.
+        return True
+
+
+# ============================================================
+# ACCOUNT
 # ============================================================
 
 def get_account():
 
     try:
-        return trading_client.get_account()
+
+        return (
+            trading_client
+            .get_account()
+        )
 
     except Exception as exc:
 
         print(
-            f"❌ Account error: {exc}"
+            f"❌ Account error: "
+            f"{exc}"
         )
 
         return None
 
+
+# ============================================================
+# RISK MANAGER
+# ============================================================
 
 def risk_check(
     account,
@@ -586,12 +698,42 @@ def risk_check(
             account.buying_power
         )
 
-    except Exception:
+    except Exception as exc:
+
+        print(
+            f"❌ Account value error: "
+            f"{exc}"
+        )
 
         return False
 
     if equity <= 0:
+
+        print(
+            "❌ Invalid account equity."
+        )
+
         return False
+
+    if option_price <= 0:
+
+        print(
+            "❌ Invalid option price."
+        )
+
+        return False
+
+    if quantity <= 0:
+
+        print(
+            "❌ Invalid quantity."
+        )
+
+        return False
+
+    # --------------------------------------------------------
+    # PREMIUM EXPOSURE
+    # --------------------------------------------------------
 
     contract_cost = (
         option_price
@@ -602,6 +744,26 @@ def risk_check(
     max_exposure = (
         equity
         * MAX_ACCOUNT_EXPOSURE_PCT
+    )
+
+    # --------------------------------------------------------
+    # STOP-LOSS RISK
+    #
+    # Current strategy:
+    # 25% stop loss.
+    #
+    # Example:
+    # $2.00 option
+    # $200 premium
+    # 25% stop
+    # Approx risk = $50
+    # --------------------------------------------------------
+
+    STOP_LOSS_PCT = 0.25
+
+    estimated_stop_loss_risk = (
+        contract_cost
+        * STOP_LOSS_PCT
     )
 
     max_risk = (
@@ -624,43 +786,106 @@ def risk_check(
     )
 
     print(
-        f"Contract Cost: "
+        f"Option Mid Price: "
+        f"${option_price:.2f}"
+    )
+
+    print(
+        f"Contracts: "
+        f"{quantity}"
+    )
+
+    print(
+        f"Estimated Cost: "
         f"${contract_cost:,.2f}"
     )
 
     print(
-        f"Max Risk Budget: "
+        f"Estimated 25% SL Risk: "
+        f"${estimated_stop_loss_risk:,.2f}"
+    )
+
+    print(
+        f"Maximum Risk Budget: "
         f"${max_risk:,.2f}"
     )
 
     print(
-        f"Max Exposure: "
+        f"Maximum Exposure: "
         f"${max_exposure:,.2f}"
     )
 
-    # Strict exposure check.
+    # --------------------------------------------------------
+    # RISK LIMIT
+    # --------------------------------------------------------
+
+    if estimated_stop_loss_risk > max_risk:
+
+        print()
+        print(
+            "❌ Risk rejected:"
+        )
+
+        print(
+            "Estimated stop-loss risk "
+            "exceeds the 1% account risk budget."
+        )
+
+        return False
+
+    # --------------------------------------------------------
+    # EXPOSURE LIMIT
+    # --------------------------------------------------------
+
     if contract_cost > max_exposure:
 
+        print()
         print(
-            "❌ Risk rejected: "
-            "exposure exceeds limit."
+            "❌ Risk rejected:"
+        )
+
+        print(
+            "Option exposure exceeds "
+            "the 5% account exposure limit."
         )
 
         return False
 
-    # Require enough buying power.
+    # --------------------------------------------------------
+    # BUYING POWER
+    # --------------------------------------------------------
+
     if contract_cost > buying_power:
 
+        print()
         print(
-            "❌ Risk rejected: "
-            "insufficient buying power."
+            "❌ Risk rejected:"
+        )
+
+        print(
+            "Insufficient buying power."
         )
 
         return False
 
+    print()
     print(
         "✅ Risk check passed."
     )
+
+    print(
+        "Risk budget: APPROVED"
+    )
+
+    print(
+        "Exposure: APPROVED"
+    )
+
+    print(
+        "Buying power: APPROVED"
+    )
+
+    print("-" * 70)
 
     return True
 
@@ -670,7 +895,7 @@ def risk_check(
 # ============================================================
 
 def scan_call_options(
-    underlying_price
+    underlying_price,
 ):
 
     try:
@@ -679,18 +904,14 @@ def scan_call_options(
 
         min_expiration = (
             today
-            + __import__(
-                "datetime"
-            ).timedelta(
+            + timedelta(
                 days=MIN_DTE
             )
         )
 
         max_expiration = (
             today
-            + __import__(
-                "datetime"
-            ).timedelta(
+            + timedelta(
                 days=MAX_DTE
             )
         )
@@ -711,11 +932,16 @@ def scan_call_options(
             limit=1000,
         )
 
-        response = trading_client.get_option_contracts(
-            request
+        response = (
+            trading_client
+            .get_option_contracts(
+                request
+            )
         )
 
-        contracts = response.option_contracts
+        contracts = (
+            response.option_contracts
+        )
 
         candidates = []
 
@@ -733,7 +959,10 @@ def scan_call_options(
                 - underlying_price
             )
 
-            if distance > MAX_STRIKE_DISTANCE:
+            if (
+                distance
+                > MAX_STRIKE_DISTANCE
+            ):
                 continue
 
             open_interest = (
@@ -742,16 +971,25 @@ def scan_call_options(
                 else 0
             )
 
-            if open_interest < MIN_OPEN_INTEREST:
+            if (
+                open_interest
+                < MIN_OPEN_INTEREST
+            ):
                 continue
 
-            expiration = contract.expiration_date
+            expiration = (
+                contract.expiration_date
+            )
 
             dte = (
-                expiration - today
+                expiration
+                - today
             ).days
 
-            if dte < MIN_DTE or dte > MAX_DTE:
+            if (
+                dte < MIN_DTE
+                or dte > MAX_DTE
+            ):
                 continue
 
             candidates.append(
@@ -766,7 +1004,6 @@ def scan_call_options(
             )
 
         if not candidates:
-
             return []
 
         # ----------------------------------------------------
@@ -805,7 +1042,10 @@ def scan_call_options(
             dte_score = (
                 1
                 - (
-                    abs(item["dte"] - 14)
+                    abs(
+                        item["dte"]
+                        - 14
+                    )
                     / 16
                 )
             )
@@ -826,7 +1066,8 @@ def scan_call_options(
     except Exception as exc:
 
         print(
-            f"❌ Option scanner error: {exc}"
+            f"❌ Option scanner error: "
+            f"{exc}"
         )
 
         return []
@@ -864,6 +1105,7 @@ def get_option_price(symbol):
             quote.ask_price or 0
         )
 
+        # Prefer midpoint.
         if bid > 0 and ask > 0:
 
             return (
@@ -889,7 +1131,7 @@ def get_option_price(symbol):
 
 
 # ============================================================
-# TRADE HISTORY
+# TRADE HISTORY INITIALIZATION
 # ============================================================
 
 def ensure_trade_history():
@@ -931,11 +1173,14 @@ def ensure_trade_history():
 # WAIT FOR BUY FILL
 # ============================================================
 
-def wait_for_buy_fill(order_id, symbol):
+def wait_for_buy_fill(
+    order_id,
+    symbol,
+):
 
     print()
     print(
-        "⏳ Waiting for PAPER BUY fill..."
+        "⏳ Waiting for REAL PAPER BUY fill..."
     )
 
     start_time = time.time()
@@ -949,7 +1194,9 @@ def wait_for_buy_fill(order_id, symbol):
 
             order = (
                 trading_client
-                .get_order_by_id(order_id)
+                .get_order_by_id(
+                    order_id
+                )
             )
 
             status = str(
@@ -958,9 +1205,13 @@ def wait_for_buy_fill(order_id, symbol):
 
             print(
                 f"[{datetime.now().strftime('%H:%M:%S')}] "
-                f"Order status: "
+                f"{symbol} BUY status: "
                 f"{status.upper()}"
             )
+
+            # ------------------------------------------------
+            # REAL FILLED
+            # ------------------------------------------------
 
             if status == "filled":
 
@@ -988,6 +1239,10 @@ def wait_for_buy_fill(order_id, symbol):
                     status,
                 )
 
+            # ------------------------------------------------
+            # FINAL FAILURE
+            # ------------------------------------------------
+
             if status in {
                 "canceled",
                 "expired",
@@ -1004,7 +1259,8 @@ def wait_for_buy_fill(order_id, symbol):
         except Exception as exc:
 
             print(
-                f"⚠️ Fill check error: {exc}"
+                f"⚠️ Fill check error: "
+                f"{exc}"
             )
 
         time.sleep(3)
@@ -1036,19 +1292,39 @@ def submit_paper_buy(
 
         print()
         print("=" * 70)
-        print("🚀 SUBMITTING REAL ALPACA PAPER BUY")
-        print("=" * 70)
-        print(f"Contract: {symbol}")
-        print(f"Quantity: {quantity}")
-        print("Account: ALPACA PAPER")
+        print(
+            "🚀 SUBMITTING REAL ALPACA PAPER BUY"
+        )
         print("=" * 70)
 
-        order = trading_client.submit_order(
-            order_data=order_request
+        print(
+            f"Contract: {symbol}"
         )
 
         print(
-            f"✅ BUY ORDER SUBMITTED"
+            f"Quantity: {quantity}"
+        )
+
+        print(
+            "Account: ALPACA PAPER"
+        )
+
+        print(
+            "Order Type: MARKET"
+        )
+
+        print("=" * 70)
+
+        order = (
+            trading_client
+            .submit_order(
+                order_data=order_request
+            )
+        )
+
+        print()
+        print(
+            "✅ BUY ORDER SUBMITTED"
         )
 
         print(
@@ -1070,6 +1346,83 @@ def submit_paper_buy(
 
 
 # ============================================================
+# SAVE REAL ENTRY STATE
+# ============================================================
+
+def save_real_entry_state(
+    symbol,
+    quantity,
+    filled_price,
+    order_id,
+):
+
+    try:
+
+        state = create_open_trade(
+            symbol=symbol,
+            quantity=quantity,
+            entry_price=filled_price,
+            entry_order_id=order_id,
+        )
+
+        print()
+        print("=" * 70)
+        print(
+            "💾 REAL TRADE STATE SAVED"
+        )
+        print("=" * 70)
+
+        print(
+            f"Symbol:       {state['symbol']}"
+        )
+
+        print(
+            f"Quantity:     {state['quantity']}"
+        )
+
+        print(
+            f"Entry Price:  "
+            f"${state['entry_price']:.2f}"
+        )
+
+        print(
+            f"Entry Value:  "
+            f"${state['entry_value']:,.2f}"
+        )
+
+        print(
+            f"Entry Order:  "
+            f"{state['entry_order_id']}"
+        )
+
+        print(
+            f"Entry Time:   "
+            f"{state['entry_time']}"
+        )
+
+        print(
+            f"Status:       "
+            f"{state['status']}"
+        )
+
+        print("=" * 70)
+
+        return True
+
+    except Exception as exc:
+
+        print()
+        print(
+            "❌ CRITICAL: Could not save "
+            "trade state."
+        )
+
+        print(exc)
+
+        return False
+
+
+# ============================================================
 # MAIN ENTRY CHECK
 # ============================================================
 
@@ -1087,12 +1440,29 @@ def run_entry_check():
     print("=" * 70)
 
     # --------------------------------------------------------
+    # INITIALIZE TRADE HISTORY FILE
+    # --------------------------------------------------------
+
+    ensure_trade_history()
+
+    # --------------------------------------------------------
+    # TRADE STATE PROTECTION
+    # --------------------------------------------------------
+
+    if has_saved_trade_state():
+
+        return
+
+    # --------------------------------------------------------
     # MARKET STATUS
     # --------------------------------------------------------
 
     try:
 
-        clock = trading_client.get_clock()
+        clock = (
+            trading_client
+            .get_clock()
+        )
 
         if not clock.is_open:
 
@@ -1113,7 +1483,8 @@ def run_entry_check():
     except Exception as exc:
 
         print(
-            f"❌ Market status error: {exc}"
+            f"❌ Market status error: "
+            f"{exc}"
         )
 
         return
@@ -1159,7 +1530,7 @@ def run_entry_check():
 
     print_ai_decision(
         data,
-        decision
+        decision,
     )
 
     # --------------------------------------------------------
@@ -1210,34 +1581,42 @@ def run_entry_check():
     print()
     print("⚙️ OPTION SELECTION")
     print("-" * 70)
+
     print(
         f"Contract:       "
         f"{selected['symbol']}"
     )
+
     print(
         f"Strike:         "
         f"${selected['strike']:.2f}"
     )
+
     print(
         f"Expiration:     "
         f"{selected['expiration']}"
     )
+
     print(
         f"DTE:            "
         f"{selected['dte']}"
     )
+
     print(
         f"Open Interest:  "
         f"{selected['open_interest']}"
     )
+
     print(
         f"Distance:       "
         f"${selected['distance']:.2f}"
     )
+
     print(
         f"Selection Score:"
         f" {selected['score']:.2f}"
     )
+
     print("-" * 70)
 
     # --------------------------------------------------------
@@ -1268,10 +1647,17 @@ def run_entry_check():
     quantity = MAX_CONTRACTS
 
     # --------------------------------------------------------
-    # RISK
+    # ACCOUNT
     # --------------------------------------------------------
 
     account = get_account()
+
+    if account is None:
+        return
+
+    # --------------------------------------------------------
+    # RISK
+    # --------------------------------------------------------
 
     if not risk_check(
         account,
@@ -1281,7 +1667,8 @@ def run_entry_check():
 
         print()
         print(
-            "🛑 ENTRY BLOCKED BY RISK MANAGER"
+            "🛑 ENTRY BLOCKED BY "
+            "RISK MANAGER"
         )
 
         return
@@ -1290,13 +1677,21 @@ def run_entry_check():
     # FINAL CONFIRMATION
     # --------------------------------------------------------
 
+    estimated_cost = (
+        option_price
+        * quantity
+        * OPTIONS_MULTIPLIER
+    )
+
     print()
     print("=" * 70)
-    print("🚀 FINAL PAPER ENTRY APPROVAL")
+    print(
+        "🚀 FINAL PAPER ENTRY APPROVAL"
+    )
     print("=" * 70)
 
     print(
-        f"Signal:          BUY"
+        "Signal:          BUY"
     )
 
     print(
@@ -1310,7 +1705,8 @@ def run_entry_check():
     )
 
     print(
-        f"Quantity:         {quantity}"
+        f"Quantity:        "
+        f"{quantity}"
     )
 
     print(
@@ -1320,13 +1716,18 @@ def run_entry_check():
 
     print(
         f"Estimated Cost:  "
-        f"${option_price * quantity * OPTIONS_MULTIPLIER:,.2f}"
+        f"${estimated_cost:,.2f}"
     )
 
     print()
     print(
         "⚠️ THIS WILL SUBMIT A REAL "
         "ALPACA PAPER ORDER."
+    )
+
+    print(
+        "No live-money order can be submitted "
+        "by this worker."
     )
 
     print("=" * 70)
@@ -1356,6 +1757,10 @@ def run_entry_check():
         selected["symbol"],
     )
 
+    # --------------------------------------------------------
+    # NOT FILLED
+    # --------------------------------------------------------
+
     if status != "filled":
 
         print()
@@ -1368,15 +1773,41 @@ def run_entry_check():
         )
 
         print(
+            "No trade state created."
+        )
+
+        print(
             "No trade history entry created."
         )
 
         return
 
+    # --------------------------------------------------------
+    # VALIDATE FILL
+    # --------------------------------------------------------
+
     if not filled_price:
 
+        print()
         print(
             "❌ Filled price unavailable."
+        )
+
+        print(
+            "Trade state will NOT be created."
+        )
+
+        return
+
+    if filled_quantity <= 0:
+
+        print()
+        print(
+            "❌ Filled quantity unavailable."
+        )
+
+        print(
+            "Trade state will NOT be created."
         )
 
         return
@@ -1397,42 +1828,127 @@ def run_entry_check():
 
     print()
     print("=" * 70)
-    print("✅ PAPER BUY FILLED")
+    print(
+        "✅ REAL PAPER BUY FILLED"
+    )
     print("=" * 70)
+
     print(
         f"Contract:      "
         f"{selected['symbol']}"
     )
+
     print(
         f"Quantity:      "
         f"{filled_quantity}"
     )
+
     print(
         f"Actual Fill:   "
         f"${filled_price:.2f}"
     )
+
     print(
         f"Position Cost: "
         f"${entry_value:,.2f}"
     )
+
     print(
         f"Entry Time:    "
         f"{entry_time}"
     )
+
+    print(
+        f"Order ID:      "
+        f"{order.id}"
+    )
+
     print("=" * 70)
+
+    # --------------------------------------------------------
+    # SAVE STATE ONLY AFTER REAL FILL
+    # --------------------------------------------------------
+
+    state_saved = save_real_entry_state(
+        symbol=selected["symbol"],
+        quantity=filled_quantity,
+        filled_price=filled_price,
+        order_id=order.id,
+    )
+
+    if not state_saved:
+
+        print()
+        print("=" * 70)
+        print(
+            "🚨 WARNING"
+        )
+        print("=" * 70)
+
+        print(
+            "Alpaca confirmed the BUY as FILLED,"
+        )
+
+        print(
+            "but AlphaPilot could not save "
+            "the local trade state."
+        )
+
+        print(
+            "DO NOT submit another BUY manually."
+        )
+
+        print(
+            "The Alpaca position is the "
+            "source of truth."
+        )
+
+        print("=" * 70)
+
+        return
+
+    # --------------------------------------------------------
+    # EXIT HANDOFF
+    # --------------------------------------------------------
 
     print()
     print(
-        "👁️ Exit Worker should now monitor "
-        "this position."
+        "👁️ EXIT WORKER HANDOFF READY"
     )
 
     print(
-        "🛡️ Stop Loss: 25%"
+        "The Exit Worker can now monitor:"
     )
 
     print(
-        "🎯 Take Profit: 50%"
+        f"  Contract: "
+        f"{selected['symbol']}"
+    )
+
+    print(
+        f"  Entry: "
+        f"${filled_price:.2f}"
+    )
+
+    print(
+        "  Stop Loss: 25%"
+    )
+
+    print(
+        "  Take Profit: 50%"
+    )
+
+    print()
+    print(
+        "🛡️ Trade lifecycle:"
+    )
+
+    print(
+        "BUY FILLED"
+        " → STATE SAVED"
+        " → EXIT MONITOR"
+        " → SELL FILLED"
+        " → REAL P&L"
     )
 
 
@@ -1454,7 +1970,8 @@ def run_worker():
 
             print()
             print(
-                f"❌ Entry worker error: {exc}"
+                f"❌ Entry worker error: "
+                f"{exc}"
             )
 
         print()
@@ -1496,6 +2013,8 @@ if __name__ == "__main__":
             "❌ ENTRY WORKER CRASHED"
         )
         print("=" * 70)
+
         print(exc)
+
         print("=" * 70)
         print()
