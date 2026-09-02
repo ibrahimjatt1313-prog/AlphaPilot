@@ -1,23 +1,25 @@
 # -*- coding: utf-8 -*-
 
 # ============================================================
-# AlphaPilot AI - LIVE Interactive Paper Trading Dashboard
+# AlphaPilot AI
+# Institutional-Style Interactive Options Paper Dashboard
 # ============================================================
-# REAL DATA ONLY
-# REAL ALPACA PAPER ACCOUNT ONLY
-# NO FABRICATED SIGNALS
+# REAL ALPACA PAPER ACCOUNT
+# REAL IEX MARKET DATA
+# REAL OPTIONS DATA
+# REAL TRADE HISTORY
 # NO FABRICATED PERFORMANCE
 # NO LIVE-MONEY EXECUTION
 #
 # Pipeline:
-# Market -> AI Signal -> Options -> Risk -> Paper Order -> Monitor
+# Market -> AI Signal -> Option Selection -> Risk
+# -> Paper Order -> Monitor -> Exit -> Performance
 # ============================================================
 
 import os
 import math
 from pathlib import Path
 from datetime import datetime, timedelta, date, timezone
-from agents.position_monitor import monitor_positions
 
 import pandas as pd
 import streamlit as st
@@ -25,10 +27,24 @@ from dotenv import load_dotenv
 
 
 # ============================================================
-# OPTIONAL ALPACA IMPORTS
+# OPTIONAL AUTO REFRESH
 # ============================================================
 
 try:
+    from streamlit_autorefresh import st_autorefresh
+
+    AUTO_REFRESH_AVAILABLE = True
+except Exception:
+    st_autorefresh = None
+    AUTO_REFRESH_AVAILABLE = False
+
+
+# ============================================================
+# ALPACA IMPORTS
+# ============================================================
+
+try:
+
     from alpaca.trading.client import TradingClient
 
     from alpaca.trading.enums import (
@@ -56,7 +72,6 @@ try:
 
     from alpaca.data.timeframe import TimeFrame
 
-    # Basic Alpaca equity data uses IEX.
     from alpaca.data.enums import DataFeed
 
     ALPACA_AVAILABLE = True
@@ -65,6 +80,9 @@ try:
 except Exception as exc:
 
     TradingClient = None
+    StockHistoricalDataClient = None
+    OptionHistoricalDataClient = None
+
     QueryOrderStatus = None
     OrderSide = None
     TimeInForce = None
@@ -72,9 +90,6 @@ except Exception as exc:
 
     GetOptionContractsRequest = None
     MarketOrderRequest = None
-
-    StockHistoricalDataClient = None
-    OptionHistoricalDataClient = None
 
     StockBarsRequest = None
     StockLatestTradeRequest = None
@@ -88,7 +103,7 @@ except Exception as exc:
 
 
 # ============================================================
-# PAGE CONFIG
+# PAGE
 # ============================================================
 
 st.set_page_config(
@@ -105,9 +120,17 @@ st.set_page_config(
 
 BASE_DIR = Path(__file__).resolve().parent
 
-TRADE_HISTORY = BASE_DIR / "agents" / "trade_history.csv"
+TRADE_HISTORY = (
+    BASE_DIR
+    / "agents"
+    / "trade_history.csv"
+)
 
-TRADE_LOG = BASE_DIR / "logs" / "trades.csv"
+TRADE_LOG = (
+    BASE_DIR
+    / "logs"
+    / "trades.csv"
+)
 
 
 # ============================================================
@@ -118,7 +141,7 @@ load_dotenv(BASE_DIR / ".env")
 
 
 # ============================================================
-# STRATEGY SETTINGS
+# CORE STRATEGY SETTINGS
 # ============================================================
 
 UNDERLYING = "SPY"
@@ -129,14 +152,93 @@ MIN_DTE = 7
 MAX_DTE = 30
 
 MAX_STRIKE_DISTANCE = 15.0
+
 MIN_OPEN_INTEREST = 100
 
 MAX_ACCOUNT_RISK = 0.01
 
-STOP_LOSS_PCT = 0.25
-TAKE_PROFIT_PCT = 0.50
+DEFAULT_STOP_LOSS_PCT = 25.0
+DEFAULT_TAKE_PROFIT_PCT = 50.0
+
+DEFAULT_SCAN_INTERVAL = 30
+
+DEFAULT_MAX_POSITION_SIZE_PCT = 5.0
+
+DEFAULT_MAX_DAILY_DRAWDOWN_PCT = 2.0
+
+DEFAULT_TRAILING_STOP_PCT = 0.0
 
 DEFAULT_CONTRACT_QTY = 1
+
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+DEFAULT_SETTINGS = {
+
+    "role": "Options Officer",
+
+    "scan_interval": DEFAULT_SCAN_INTERVAL,
+
+    "tickers": "SPY",
+
+    "max_position_size_pct":
+        DEFAULT_MAX_POSITION_SIZE_PCT,
+
+    "max_daily_drawdown_pct":
+        DEFAULT_MAX_DAILY_DRAWDOWN_PCT,
+
+    "stop_loss_pct":
+        DEFAULT_STOP_LOSS_PCT,
+
+    "take_profit_pct":
+        DEFAULT_TAKE_PROFIT_PCT,
+
+    "trailing_stop_pct":
+        DEFAULT_TRAILING_STOP_PCT,
+
+    "strategy": "Long Call",
+
+}
+
+
+SESSION_DEFAULTS = {
+
+    "market_data": None,
+
+    "ai_decision": None,
+
+    "selected_option": None,
+
+    "option_candidates": [],
+
+    "risk_result": None,
+
+    "last_order": None,
+
+    "analysis_timestamp": None,
+
+    "market_error": None,
+
+    "paper_order_confirmation": False,
+
+    "copilot_mode": True,
+
+    "autopilot_mode": False,
+
+    "terminal_cleared": False,
+
+    "settings": DEFAULT_SETTINGS.copy(),
+
+}
+
+
+for key, value in SESSION_DEFAULTS.items():
+
+    if key not in st.session_state:
+
+        st.session_state[key] = value
 
 
 # ============================================================
@@ -145,97 +247,283 @@ DEFAULT_CONTRACT_QTY = 1
 
 st.markdown(
     """
-    <style>
+<style>
 
-    .stApp {
-        background: #0b1120;
-    }
-
-    .block-container {
-        max-width: 1550px;
-        padding-top: 1.2rem;
-        padding-bottom: 2rem;
-    }
-
-    h1, h2, h3 {
-        color: #f8fafc !important;
-    }
-
-    .hero-box {
-        background: linear-gradient(
-            135deg,
-            #111827,
-            #172033
-        );
-        border: 1px solid #29364d;
-        border-radius: 16px;
-        padding: 24px;
-        margin-bottom: 20px;
-    }
-
-    .hero-title {
-        font-size: 2.3rem;
-        font-weight: 800;
-        color: #f8fafc;
-        margin-bottom: 5px;
-    }
-
-    .hero-subtitle {
-        color: #94a3b8;
-        font-size: 1rem;
-    }
-
-    .pipeline-box {
-        background: #111827;
-        border: 1px solid #243044;
-        border-radius: 12px;
-        padding: 12px 16px;
-        margin-bottom: 18px;
-        color: #cbd5e1;
-        text-align: center;
-        font-size: 14px;
-    }
-
-    div[data-testid="stMetric"] {
-        background: #111827;
-        border: 1px solid #243044;
-        border-radius: 12px;
-        padding: 14px;
-    }
-
-    .stButton > button {
-        width: 100%;
-        border-radius: 9px;
-        min-height: 42px;
-        font-weight: 600;
-    }
-
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# ============================================================
-# SESSION STATE
-# ============================================================
-
-defaults = {
-    "market_data": None,
-    "ai_decision": None,
-    "selected_option": None,
-    "option_candidates": [],
-    "risk_result": None,
-    "last_order": None,
-    "analysis_timestamp": None,
-    "market_error": None,
-    "paper_order_confirmation": False,
+html, body, [data-testid="stAppViewContainer"] {
+    background: #07111f;
 }
 
-for key, value in defaults.items():
+[data-testid="stHeader"] {
+    background: rgba(7,17,31,0.92);
+}
 
-    if key not in st.session_state:
-        st.session_state[key] = value
+.block-container {
+    max-width: 1580px;
+    padding-top: 1.1rem;
+    padding-bottom: 3rem;
+}
+
+h1, h2, h3, h4 {
+    color: #f8fafc !important;
+    letter-spacing: -0.02em;
+}
+
+p, span, label {
+    color: #cbd5e1;
+}
+
+.hero {
+    background:
+        radial-gradient(
+            circle at 90% 10%,
+            rgba(37,99,235,.18),
+            transparent 30%
+        ),
+        linear-gradient(
+            135deg,
+            #0c1728,
+            #101c30
+        );
+
+    border: 1px solid #22324b;
+    border-radius: 20px;
+    padding: 28px;
+    margin-bottom: 16px;
+    box-shadow: 0 18px 45px rgba(0,0,0,.20);
+}
+
+.hero-title {
+    font-size: 2.5rem;
+    font-weight: 850;
+    color: #ffffff;
+}
+
+.hero-subtitle {
+    margin-top: 5px;
+    font-size: 1rem;
+    color: #8fa4bd;
+}
+
+.badges {
+    margin-top: 18px;
+}
+
+.badge {
+    display: inline-block;
+    padding: 6px 11px;
+    margin-right: 7px;
+    border-radius: 999px;
+    border: 1px solid #30435f;
+    background: #101d30;
+    color: #b8c8db;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.badge-live {
+    border-color: #166534;
+    color: #86efac;
+}
+
+.badge-paper {
+    border-color: #854d0e;
+    color: #fde68a;
+}
+
+.navbar {
+    background: #0b1728;
+    border: 1px solid #22324b;
+    border-radius: 14px;
+    padding: 12px 16px;
+    margin-bottom: 18px;
+}
+
+.navbar a {
+    color: #9fb0c5 !important;
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 700;
+    margin-right: 22px;
+}
+
+.navbar a:hover {
+    color: #ffffff !important;
+}
+
+.pipeline {
+    background: #0b1728;
+    border: 1px solid #22324b;
+    border-radius: 14px;
+    padding: 14px;
+    text-align: center;
+    color: #aebed0;
+    font-size: 13px;
+    margin-bottom: 20px;
+}
+
+.section-card {
+    background: #0b1728;
+    border: 1px solid #22324b;
+    border-radius: 16px;
+    padding: 18px;
+    margin-bottom: 16px;
+}
+
+.metric-card {
+    background: linear-gradient(
+        145deg,
+        #0d192b,
+        #0a1524
+    );
+    border: 1px solid #22324b;
+    border-radius: 15px;
+    padding: 18px;
+    min-height: 118px;
+}
+
+.metric-label {
+    color: #7f93ab;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+}
+
+.metric-value {
+    color: #f8fafc;
+    font-size: 1.55rem;
+    font-weight: 800;
+    margin-top: 8px;
+}
+
+.metric-sub {
+    color: #7f93ab;
+    font-size: 11px;
+    margin-top: 5px;
+}
+
+.status-online {
+    color: #86efac;
+    font-weight: 800;
+}
+
+.status-warning {
+    color: #fde68a;
+    font-weight: 800;
+}
+
+.status-danger {
+    color: #fca5a5;
+    font-weight: 800;
+}
+
+.signal-buy {
+    background: rgba(22,101,52,.18);
+    border: 1px solid #166534;
+    border-radius: 14px;
+    padding: 20px;
+}
+
+.signal-no-trade {
+    background: rgba(127,29,29,.18);
+    border: 1px solid #7f1d1d;
+    border-radius: 14px;
+    padding: 20px;
+}
+
+.signal-title {
+    font-size: 1.55rem;
+    font-weight: 850;
+}
+
+.recommendation {
+    background:
+        linear-gradient(
+            145deg,
+            #111d31,
+            #0b1728
+        );
+    border: 1px solid #31435e;
+    border-radius: 16px;
+    padding: 20px;
+}
+
+.recommendation-title {
+    color: #f8fafc;
+    font-size: 1.2rem;
+    font-weight: 800;
+}
+
+.small-muted {
+    color: #71859d;
+    font-size: 12px;
+}
+
+.warning-box {
+    background: rgba(146,64,14,.12);
+    border: 1px solid #854d0e;
+    border-radius: 12px;
+    padding: 14px;
+}
+
+.lock-box {
+    background: rgba(127,29,29,.10);
+    border: 1px solid #7f1d1d;
+    border-radius: 12px;
+    padding: 14px;
+}
+
+.success-box {
+    background: rgba(22,101,52,.10);
+    border: 1px solid #166534;
+    border-radius: 12px;
+    padding: 14px;
+}
+
+.terminal {
+    background: #050b14;
+    border: 1px solid #1e293b;
+    border-radius: 13px;
+    padding: 15px;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+    color: #9fb3c8;
+}
+
+.terminal-line {
+    padding: 5px 0;
+    border-bottom: 1px solid #111827;
+}
+
+.footer {
+    text-align: center;
+    color: #64748b;
+    font-size: 12px;
+    padding: 25px 0 10px;
+}
+
+div[data-testid="stMetric"] {
+    background: #0b1728;
+    border: 1px solid #22324b;
+    border-radius: 14px;
+    padding: 12px;
+}
+
+.stButton > button {
+    border-radius: 9px;
+    min-height: 42px;
+    font-weight: 700;
+}
+
+[data-testid="stSidebar"] {
+    background: #081321;
+    border-right: 1px solid #1d2b40;
+}
+
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
 
 # ============================================================
@@ -333,18 +621,24 @@ def find_pnl_column(df):
     return None
 
 
-def now_local():
+def fmt_timestamp():
 
-    return datetime.now()
+    return datetime.now().strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
 
 
 # ============================================================
 # CREDENTIALS
 # ============================================================
 
-API_KEY = get_secret("ALPACA_API_KEY")
+API_KEY = get_secret(
+    "ALPACA_API_KEY"
+)
 
-SECRET_KEY = get_secret("ALPACA_SECRET_KEY")
+SECRET_KEY = get_secret(
+    "ALPACA_SECRET_KEY"
+)
 
 
 # ============================================================
@@ -358,25 +652,32 @@ option_client = None
 alpaca_error = None
 
 
-if ALPACA_AVAILABLE and API_KEY and SECRET_KEY:
+if (
+    ALPACA_AVAILABLE
+    and API_KEY
+    and SECRET_KEY
+):
 
     try:
 
-        # PAPER ONLY
         trading_client = TradingClient(
             API_KEY,
             SECRET_KEY,
             paper=True,
         )
 
-        stock_client = StockHistoricalDataClient(
-            API_KEY,
-            SECRET_KEY,
+        stock_client = (
+            StockHistoricalDataClient(
+                API_KEY,
+                SECRET_KEY,
+            )
         )
 
-        option_client = OptionHistoricalDataClient(
-            API_KEY,
-            SECRET_KEY,
+        option_client = (
+            OptionHistoricalDataClient(
+                API_KEY,
+                SECRET_KEY,
+            )
         )
 
     except Exception as exc:
@@ -388,16 +689,81 @@ else:
     if not ALPACA_AVAILABLE:
 
         alpaca_error = (
-            "alpaca-py import failed: "
+            "alpaca-py unavailable: "
             + str(ALPACA_IMPORT_ERROR)
         )
 
-    elif not API_KEY or not SECRET_KEY:
+    elif not API_KEY:
 
         alpaca_error = (
-            "ALPACA_API_KEY or ALPACA_SECRET_KEY "
-            "is missing."
+            "ALPACA_API_KEY is missing."
         )
+
+    elif not SECRET_KEY:
+
+        alpaca_error = (
+            "ALPACA_SECRET_KEY is missing."
+        )
+
+
+# ============================================================
+# ACCOUNT
+# ============================================================
+
+def get_account():
+
+    if trading_client is None:
+        return None
+
+    try:
+
+        return trading_client.get_account()
+
+    except Exception:
+
+        return None
+
+
+# ============================================================
+# POSITIONS
+# ============================================================
+
+def get_positions():
+
+    if trading_client is None:
+        return []
+
+    try:
+
+        return trading_client.get_all_positions()
+
+    except Exception:
+
+        return []
+
+
+# ============================================================
+# ORDERS
+# ============================================================
+
+def get_orders():
+
+    if trading_client is None:
+        return []
+
+    try:
+
+        if QueryOrderStatus:
+
+            return trading_client.get_orders(
+                filter=QueryOrderStatus.ALL
+            )
+
+        return trading_client.get_orders()
+
+    except Exception:
+
+        return []
 
 
 # ============================================================
@@ -415,31 +781,36 @@ def fetch_market_data():
     if DataFeed is None:
 
         raise RuntimeError(
-            "Alpaca DataFeed support is unavailable. "
-            "Upgrade alpaca-py."
+            "Alpaca IEX data-feed support unavailable."
         )
 
     # --------------------------------------------------------
-    # LATEST SPY TRADE
+    # LATEST TRADE
     # --------------------------------------------------------
 
-    latest_request = StockLatestTradeRequest(
-        symbol_or_symbols=UNDERLYING,
-        feed=DataFeed.IEX,
+    latest_request = (
+        StockLatestTradeRequest(
+            symbol_or_symbols=UNDERLYING,
+            feed=DataFeed.IEX,
+        )
     )
 
-    latest = stock_client.get_stock_latest_trade(
-        latest_request
+    latest_response = (
+        stock_client.get_stock_latest_trade(
+            latest_request
+        )
     )
 
-    latest_trade = latest.get(
-        UNDERLYING
+    latest_trade = (
+        latest_response.get(
+            UNDERLYING
+        )
     )
 
     if latest_trade is None:
 
         raise RuntimeError(
-            "No latest SPY trade was returned."
+            "No latest SPY trade returned."
         )
 
     current_price = safe_float(
@@ -457,24 +828,29 @@ def fetch_market_data():
         )
 
     # --------------------------------------------------------
-    # HISTORICAL DAILY BARS
+    # DAILY BARS
     # --------------------------------------------------------
 
     end = datetime.now(timezone.utc)
 
-    start = end - timedelta(days=120)
+    start = (
+        end
+        - timedelta(days=180)
+    )
 
     bars_request = StockBarsRequest(
         symbol_or_symbols=UNDERLYING,
         timeframe=TimeFrame.Day,
         start=start,
         end=end,
-        limit=100,
+        limit=150,
         feed=DataFeed.IEX,
     )
 
-    bars_response = stock_client.get_stock_bars(
-        bars_request
+    bars_response = (
+        stock_client.get_stock_bars(
+            bars_request
+        )
     )
 
     try:
@@ -491,25 +867,30 @@ def fetch_market_data():
 
         rows.append(
             {
-                "timestamp": getattr(
-                    bar,
-                    "timestamp",
-                    None,
-                ),
-                "close": safe_float(
+                "timestamp":
                     getattr(
                         bar,
-                        "close",
-                        0,
-                    )
-                ),
-                "volume": safe_float(
-                    getattr(
-                        bar,
-                        "volume",
-                        0,
-                    )
-                ),
+                        "timestamp",
+                        None,
+                    ),
+
+                "close":
+                    safe_float(
+                        getattr(
+                            bar,
+                            "close",
+                            0,
+                        )
+                    ),
+
+                "volume":
+                    safe_float(
+                        getattr(
+                            bar,
+                            "volume",
+                            0,
+                        )
+                    ),
             }
         )
 
@@ -518,18 +899,17 @@ def fetch_market_data():
     if df.empty:
 
         raise RuntimeError(
-            "No historical SPY bars were returned."
+            "No historical SPY bars returned."
         )
 
     if len(df) < 50:
 
         raise RuntimeError(
-            "Not enough SPY historical bars to calculate "
-            "SMA20, SMA50, RSI and MACD."
+            "At least 50 SPY daily bars are required."
         )
 
     # --------------------------------------------------------
-    # TECHNICAL INDICATORS
+    # SMA
     # --------------------------------------------------------
 
     df["sma20"] = (
@@ -544,11 +924,19 @@ def fetch_market_data():
         .mean()
     )
 
+    # --------------------------------------------------------
+    # RSI
+    # --------------------------------------------------------
+
     delta = df["close"].diff()
 
-    gain = delta.clip(lower=0)
+    gain = delta.clip(
+        lower=0
+    )
 
-    loss = -delta.clip(upper=0)
+    loss = -delta.clip(
+        upper=0
+    )
 
     avg_gain = (
         gain
@@ -564,7 +952,8 @@ def fetch_market_data():
 
     rs = (
         avg_gain
-        / avg_loss.replace(
+        /
+        avg_loss.replace(
             0,
             math.nan,
         )
@@ -572,13 +961,17 @@ def fetch_market_data():
 
     df["rsi"] = (
         100
-        - (
+        -
+        (
             100
-            / (
-                1 + rs
-            )
+            /
+            (1 + rs)
         )
     )
+
+    # --------------------------------------------------------
+    # MACD
+    # --------------------------------------------------------
 
     ema12 = (
         df["close"]
@@ -598,7 +991,9 @@ def fetch_market_data():
         .mean()
     )
 
-    df["macd"] = ema12 - ema26
+    df["macd"] = (
+        ema12 - ema26
+    )
 
     df["macd_signal"] = (
         df["macd"]
@@ -609,6 +1004,10 @@ def fetch_market_data():
         .mean()
     )
 
+    # --------------------------------------------------------
+    # VOLUME
+    # --------------------------------------------------------
+
     df["volume_sma20"] = (
         df["volume"]
         .rolling(20)
@@ -617,68 +1016,76 @@ def fetch_market_data():
 
     row = df.iloc[-1]
 
-    price = current_price
+    sma20 = safe_float(
+        row["sma20"]
+    )
 
-    sma20 = safe_float(row["sma20"])
+    sma50 = safe_float(
+        row["sma50"]
+    )
 
-    sma50 = safe_float(row["sma50"])
+    rsi = safe_float(
+        row["rsi"]
+    )
 
-    rsi = safe_float(row["rsi"])
-
-    macd = safe_float(row["macd"])
+    macd = safe_float(
+        row["macd"]
+    )
 
     macd_signal = safe_float(
         row["macd_signal"]
     )
 
-    volume = safe_float(row["volume"])
+    volume = safe_float(
+        row["volume"]
+    )
 
     volume_average = safe_float(
         row["volume_sma20"]
     )
 
-    # --------------------------------------------------------
-    # CONDITIONS
-    # --------------------------------------------------------
-
-    bullish_trend = (
-        price > sma20
-        and sma20 > sma50
-    )
-
-    bullish_macd = (
-        macd > macd_signal
-    )
-
-    supportive_rsi = (
-        50 <= rsi <= 70
-    )
-
-    volume_confirmation = (
-        volume >= volume_average
-        if volume_average > 0
-        else False
-    )
-
     return {
 
-        "price": price,
-        "sma20": sma20,
-        "sma50": sma50,
-        "rsi": rsi,
-        "macd": macd,
-        "macd_signal": macd_signal,
-        "volume": volume,
-        "volume_average": volume_average,
+        "price": current_price,
 
-        "bullish_trend": bullish_trend,
-        "bullish_macd": bullish_macd,
-        "supportive_rsi": supportive_rsi,
-        "volume_confirmation": volume_confirmation,
+        "sma20": sma20,
+
+        "sma50": sma50,
+
+        "rsi": rsi,
+
+        "macd": macd,
+
+        "macd_signal": macd_signal,
+
+        "volume": volume,
+
+        "volume_average":
+            volume_average,
+
+        "bullish_trend": (
+            current_price > sma20
+            and sma20 > sma50
+        ),
+
+        "bullish_macd": (
+            macd > macd_signal
+        ),
+
+        "supportive_rsi": (
+            50 <= rsi <= 70
+        ),
+
+        "volume_confirmation": (
+            volume >= volume_average
+            if volume_average > 0
+            else False
+        ),
 
         "bars": df,
 
-        "timestamp": now_local(),
+        "timestamp":
+            datetime.now(),
 
     }
 
@@ -687,42 +1094,41 @@ def fetch_market_data():
 # AI DECISION
 # ============================================================
 
-def calculate_ai_decision(market):
+def calculate_ai_decision(
+    market
+):
 
     checks = {
 
-        "Price > SMA20": (
+        "Price > SMA20":
             market["price"]
-            > market["sma20"]
-        ),
+            > market["sma20"],
 
-        "SMA20 > SMA50": (
+        "SMA20 > SMA50":
             market["sma20"]
-            > market["sma50"]
-        ),
+            > market["sma50"],
 
-        "RSI supportive": (
+        "RSI supportive":
             50
             <= market["rsi"]
-            <= 70
-        ),
+            <= 70,
 
-        "MACD bullish": (
+        "MACD bullish":
             market["macd"]
-            > market["macd_signal"]
-        ),
+            > market["macd_signal"],
 
-        "Volume confirmation": (
-            market["volume"]
-            >= market["volume_average"]
+        "Volume confirmation":
+            (
+                market["volume"]
+                >= market["volume_average"]
+            )
             if market["volume_average"] > 0
-            else False
-        ),
+            else False,
     }
 
     passed = sum(
-        bool(value)
-        for value in checks.values()
+        bool(v)
+        for v in checks.values()
     )
 
     total = len(checks)
@@ -743,270 +1149,55 @@ def calculate_ai_decision(market):
 
         "signal": signal,
 
-        "confidence": confidence,
+        "confidence":
+            confidence,
 
         "checks": checks,
 
-        "passed": passed,
+        "passed":
+            passed,
 
-        "total": total,
+        "total":
+            total,
 
     }
 
 
 # ============================================================
-# OPTIONS SCANNER
+# OPTION QUOTE
 # ============================================================
 
-def scan_options(market):
-
-    if trading_client is None:
-
-        raise RuntimeError(
-            "Trading client is not connected."
-        )
-
-    today = date.today()
-
-    expiration_min = (
-        today
-        + timedelta(days=MIN_DTE)
-    )
-
-    expiration_max = (
-        today
-        + timedelta(days=MAX_DTE)
-    )
-
-    lower_strike = (
-        market["price"]
-        - MAX_STRIKE_DISTANCE
-    )
-
-    upper_strike = (
-        market["price"]
-        + MAX_STRIKE_DISTANCE
-    )
-
-    request = GetOptionContractsRequest(
-
-        underlying_symbols=[
-            UNDERLYING
-        ],
-
-        type=ContractType.CALL,
-
-        expiration_date_gte=expiration_min,
-
-        expiration_date_lte=expiration_max,
-
-        strike_price_gte=str(
-            round(
-                lower_strike,
-                2,
-            )
-        ),
-
-        strike_price_lte=str(
-            round(
-                upper_strike,
-                2,
-            )
-        ),
-
-        limit=10000,
-    )
-
-    response = (
-        trading_client.get_option_contracts(
-            request
-        )
-    )
-
-    contracts = getattr(
-        response,
-        "option_contracts",
-        None,
-    )
-
-    if contracts is None:
-        contracts = []
-
-    candidates = []
-
-    for contract in contracts:
-
-        if not getattr(
-            contract,
-            "tradable",
-            False,
-        ):
-            continue
-
-        strike = safe_float(
-            getattr(
-                contract,
-                "strike_price",
-                0,
-            )
-        )
-
-        oi = int(
-            safe_float(
-                getattr(
-                    contract,
-                    "open_interest",
-                    0,
-                )
-            )
-        )
-
-        expiration = getattr(
-            contract,
-            "expiration_date",
-            None,
-        )
-
-        symbol = getattr(
-            contract,
-            "symbol",
-            "",
-        )
-
-        if not symbol:
-            continue
-
-        if strike <= 0:
-            continue
-
-        if expiration is None:
-            continue
-
-        distance = abs(
-            strike
-            - market["price"]
-        )
-
-        if distance > MAX_STRIKE_DISTANCE:
-            continue
-
-        if oi < MIN_OPEN_INTEREST:
-            continue
-
-        dte = (
-            expiration - today
-        ).days
-
-        if dte < MIN_DTE:
-            continue
-
-        if dte > MAX_DTE:
-            continue
-
-        # ----------------------------------------------------
-        # SELECTION SCORE
-        # ----------------------------------------------------
-
-        distance_score = max(
-            0,
-            100
-            - (
-                distance
-                / MAX_STRIKE_DISTANCE
-                * 100
-            ),
-        )
-
-        oi_score = min(
-            100,
-            (
-                oi
-                / 1000
-                * 100
-            ),
-        )
-
-        dte_mid = (
-            MIN_DTE
-            + MAX_DTE
-        ) / 2
-
-        dte_score = max(
-            0,
-            100
-            - (
-                abs(
-                    dte
-                    - dte_mid
-                )
-                / (
-                    MAX_DTE
-                    - MIN_DTE
-                )
-                * 100
-            ),
-        )
-
-        score = (
-            distance_score * 0.45
-            + oi_score * 0.30
-            + dte_score * 0.25
-        )
-
-        candidates.append(
-            {
-                "symbol": symbol,
-                "strike": strike,
-                "expiration": expiration,
-                "dte": dte,
-                "open_interest": oi,
-                "score": round(
-                    score,
-                    2,
-                ),
-            }
-        )
-
-    if not candidates:
-
-        raise RuntimeError(
-            "No suitable SPY CALL contracts found "
-            "under the current selection rules."
-        )
-
-    candidates.sort(
-        key=lambda x: x["score"],
-        reverse=True,
-    )
-
-    return (
-        candidates[0],
-        candidates,
-    )
-
-
-# ============================================================
-# OPTION PRICE
-# ============================================================
-
-def get_option_price(symbol):
+def get_option_price(
+    symbol
+):
 
     if option_client is None:
         return 0.0
 
     try:
 
-        request = OptionLatestQuoteRequest(
-            symbol_or_symbols=symbol
+        request = (
+            OptionLatestQuoteRequest(
+                symbol_or_symbols=symbol
+            )
         )
 
         response = (
-            option_client.get_option_latest_quote(
+            option_client
+            .get_option_latest_quote(
                 request
             )
         )
 
-        quote = response.get(symbol)
+        try:
+
+            quote = response[symbol]
+
+        except Exception:
+
+            quote = response.get(
+                symbol
+            )
 
         if quote is None:
             return 0.0
@@ -1040,27 +1231,344 @@ def get_option_price(symbol):
             return bid
 
     except Exception:
+
         pass
 
     return 0.0
 
 
 # ============================================================
-# ACCOUNT
+# OPTION SCANNER
 # ============================================================
 
-def get_account():
+def scan_options(
+    market
+):
 
     if trading_client is None:
+
+        raise RuntimeError(
+            "Trading client is not connected."
+        )
+
+    today = date.today()
+
+    expiration_min = (
+        today
+        + timedelta(
+            days=MIN_DTE
+        )
+    )
+
+    expiration_max = (
+        today
+        + timedelta(
+            days=MAX_DTE
+        )
+    )
+
+    lower_strike = max(
+        1,
+        market["price"]
+        - MAX_STRIKE_DISTANCE
+    )
+
+    upper_strike = (
+        market["price"]
+        + MAX_STRIKE_DISTANCE
+    )
+
+    request = (
+        GetOptionContractsRequest(
+
+            underlying_symbols=[
+                UNDERLYING
+            ],
+
+            type=ContractType.CALL,
+
+            expiration_date_gte=
+                expiration_min,
+
+            expiration_date_lte=
+                expiration_max,
+
+            # Alpaca request fields are strings.
+            strike_price_gte=str(
+                round(
+                    lower_strike,
+                    2,
+                )
+            ),
+
+            strike_price_lte=str(
+                round(
+                    upper_strike,
+                    2,
+                )
+            ),
+
+            limit=10000,
+        )
+    )
+
+    response = (
+        trading_client
+        .get_option_contracts(
+            request
+        )
+    )
+
+    contracts = getattr(
+        response,
+        "option_contracts",
+        []
+    )
+
+    candidates = []
+
+    for contract in contracts:
+
+        if not getattr(
+            contract,
+            "tradable",
+            False,
+        ):
+            continue
+
+        symbol = getattr(
+            contract,
+            "symbol",
+            "",
+        )
+
+        strike = safe_float(
+            getattr(
+                contract,
+                "strike_price",
+                0,
+            )
+        )
+
+        oi = int(
+            safe_float(
+                getattr(
+                    contract,
+                    "open_interest",
+                    0,
+                )
+            )
+        )
+
+        expiration = getattr(
+            contract,
+            "expiration_date",
+            None,
+        )
+
+        if not symbol:
+            continue
+
+        if strike <= 0:
+            continue
+
+        if expiration is None:
+            continue
+
+        distance = abs(
+            strike
+            - market["price"]
+        )
+
+        dte = (
+            expiration
+            - today
+        ).days
+
+        if (
+            distance
+            > MAX_STRIKE_DISTANCE
+        ):
+            continue
+
+        if oi < MIN_OPEN_INTEREST:
+            continue
+
+        if (
+            dte < MIN_DTE
+            or dte > MAX_DTE
+        ):
+            continue
+
+        distance_score = max(
+            0,
+            100
+            -
+            (
+                distance
+                /
+                MAX_STRIKE_DISTANCE
+                * 100
+            )
+        )
+
+        oi_score = min(
+            100,
+            (
+                oi
+                / 1000
+                * 100
+            )
+        )
+
+        dte_mid = (
+            MIN_DTE
+            + MAX_DTE
+        ) / 2
+
+        dte_score = max(
+            0,
+            100
+            -
+            (
+                abs(
+                    dte
+                    - dte_mid
+                )
+                /
+                (
+                    MAX_DTE
+                    - MIN_DTE
+                )
+                * 100
+            )
+        )
+
+        score = (
+            distance_score * 0.45
+            +
+            oi_score * 0.30
+            +
+            dte_score * 0.25
+        )
+
+        candidates.append(
+            {
+
+                "symbol":
+                    symbol,
+
+                "strike":
+                    strike,
+
+                "expiration":
+                    expiration,
+
+                "dte":
+                    dte,
+
+                "open_interest":
+                    oi,
+
+                "score":
+                    round(
+                        score,
+                        2,
+                    ),
+
+            }
+        )
+
+    if not candidates:
+
+        raise RuntimeError(
+            "No suitable SPY CALL contracts found."
+        )
+
+    candidates.sort(
+        key=lambda x:
+            x["score"],
+        reverse=True,
+    )
+
+    # Quote only the strongest candidates.
+    quote_candidates = (
+        candidates[:100]
+    )
+
+    best = None
+
+    for candidate in quote_candidates:
+
+        price = get_option_price(
+            candidate["symbol"]
+        )
+
+        candidate["price"] = price
+
+        if price > 0:
+
+            if best is None:
+
+                best = candidate
+
+    if best is None:
+
+        # We still return the highest-ranked
+        # contract, but price remains unavailable.
+        best = candidates[0]
+
+        best["price"] = (
+            get_option_price(
+                best["symbol"]
+            )
+        )
+
+    return (
+        best,
+        candidates,
+    )
+
+
+# ============================================================
+# DAILY P&L
+# ============================================================
+
+def get_day_pnl(
+    account
+):
+
+    if account is None:
+        return None
+
+    current = safe_float(
+        getattr(
+            account,
+            "equity",
+            0,
+        )
+    )
+
+    raw_last = getattr(
+        account,
+        "last_equity",
+        None,
+    )
+
+    if raw_last is None:
         return None
 
     try:
 
-        return trading_client.get_account()
+        last = float(
+            raw_last
+        )
 
     except Exception:
 
         return None
+
+    return current - last
 
 
 # ============================================================
@@ -1075,21 +1583,56 @@ def run_risk_check():
 
     account = get_account()
 
+    settings = (
+        st.session_state.settings
+    )
+
+    decision = (
+        st.session_state.ai_decision
+    )
+
     if option is None:
 
         return {
             "approved": False,
-            "reason": "No option has been selected.",
+            "reason":
+                "No option selected.",
         }
 
     if account is None:
 
         return {
             "approved": False,
-            "reason": "Alpaca account unavailable.",
+            "reason":
+                "Alpaca account unavailable.",
         }
 
-    account_equity = safe_float(
+    if decision is None:
+
+        return {
+            "approved": False,
+            "reason":
+                "AI decision unavailable.",
+        }
+
+    if decision["signal"] != "BUY":
+
+        return {
+            "approved": False,
+            "reason":
+                "AI signal is NO TRADE.",
+        }
+
+    if settings["strategy"] != "Long Call":
+
+        return {
+            "approved": False,
+            "reason":
+                "Selected strategy is not implemented "
+                "for single-leg execution.",
+        }
+
+    equity = safe_float(
         getattr(
             account,
             "equity",
@@ -1104,15 +1647,95 @@ def run_risk_check():
         )
     )
 
+    if equity <= 0:
+
+        return {
+            "approved": False,
+            "reason":
+                "Account equity unavailable.",
+        }
+
     if option_price <= 0:
 
         return {
             "approved": False,
-            "reason": (
-                "No usable option quote is currently "
-                "available."
-            ),
+            "reason":
+                "No usable option quote available.",
         }
+
+    day_pnl = get_day_pnl(
+        account
+    )
+
+    if (
+        day_pnl is not None
+        and day_pnl < 0
+    ):
+
+        daily_drawdown = (
+            abs(day_pnl)
+            / equity
+            * 100
+        )
+
+    else:
+
+        daily_drawdown = 0.0
+
+    daily_drawdown_ok = (
+        daily_drawdown
+        <
+        settings[
+            "max_daily_drawdown_pct"
+        ]
+    )
+
+    max_risk = (
+        equity
+        * MAX_ACCOUNT_RISK
+    )
+
+    max_exposure = (
+        equity
+        *
+        settings[
+            "max_position_size_pct"
+        ]
+        / 100
+    )
+
+    risk_per_contract = (
+        option_price
+        * 100
+    )
+
+    max_qty_risk = (
+        math.floor(
+            max_risk
+            /
+            risk_per_contract
+        )
+        if risk_per_contract > 0
+        else 0
+    )
+
+    max_qty_exposure = (
+        math.floor(
+            max_exposure
+            /
+            risk_per_contract
+        )
+        if risk_per_contract > 0
+        else 0
+    )
+
+    max_quantity = max(
+        0,
+        min(
+            max_qty_risk,
+            max_qty_exposure,
+        )
+    )
 
     quantity = DEFAULT_CONTRACT_QTY
 
@@ -1122,119 +1745,179 @@ def run_risk_check():
         * quantity
     )
 
-    max_risk = (
-        account_equity
-        * MAX_ACCOUNT_RISK
+    position_size_ok = (
+        estimated_cost
+        <= max_exposure
     )
 
-    position_size_ok = (
+    account_risk_ok = (
         estimated_cost
         <= max_risk
     )
 
-    exposure_ok = (
-        estimated_cost
-        <= account_equity
-        * 0.05
+    stop_loss_pct = (
+        settings[
+            "stop_loss_pct"
+        ]
+        / 100
+    )
+
+    take_profit_pct = (
+        settings[
+            "take_profit_pct"
+        ]
+        / 100
     )
 
     stop_loss = (
         option_price
-        * (
+        *
+        (
             1
-            - STOP_LOSS_PCT
+            - stop_loss_pct
         )
     )
 
     take_profit = (
         option_price
-        * (
+        *
+        (
             1
-            + TAKE_PROFIT_PCT
+            + take_profit_pct
         )
     )
 
     stop_loss_ok = (
-        stop_loss > 0
-        and stop_loss < option_price
+        0
+        < stop_loss
+        < option_price
     )
 
     take_profit_ok = (
-        take_profit > option_price
+        take_profit
+        > option_price
     )
 
     duplicate_entry = False
 
-    if trading_client is not None:
+    existing_positions = (
+        get_positions()
+    )
 
-        try:
+    for position in existing_positions:
 
-            positions = (
-                trading_client.get_all_positions()
-            )
+        symbol = getattr(
+            position,
+            "symbol",
+            "",
+        )
 
-            duplicate_entry = any(
+        if symbol == option["symbol"]:
 
-                getattr(
-                    p,
-                    "symbol",
-                    "",
-                )
-                == option["symbol"]
-
-                for p in positions
-
-            )
-
-        except Exception:
-
-            duplicate_entry = False
+            duplicate_entry = True
 
     duplicate_ok = (
         not duplicate_entry
     )
 
+    no_existing_option = True
+
+    for position in existing_positions:
+
+        symbol = getattr(
+            position,
+            "symbol",
+            "",
+        )
+
+        asset_class = enum_text(
+            getattr(
+                position,
+                "asset_class",
+                "",
+            )
+        )
+
+        if (
+            asset_class == "us_option"
+            or symbol.startswith("SPY")
+        ):
+
+            no_existing_option = False
+
     approved = all(
         [
+            daily_drawdown_ok,
             position_size_ok,
-            exposure_ok,
+            account_risk_ok,
             stop_loss_ok,
             take_profit_ok,
             duplicate_ok,
+            no_existing_option,
+            max_quantity >= quantity,
         ]
     )
 
     return {
 
-        "approved": approved,
+        "approved":
+            approved,
 
-        "position_size_ok": position_size_ok,
+        "position_size_ok":
+            position_size_ok,
 
-        "exposure_ok": exposure_ok,
+        "account_risk_ok":
+            account_risk_ok,
 
-        "stop_loss_ok": stop_loss_ok,
+        "daily_drawdown_ok":
+            daily_drawdown_ok,
 
-        "take_profit_ok": take_profit_ok,
+        "stop_loss_ok":
+            stop_loss_ok,
 
-        "duplicate_ok": duplicate_ok,
+        "take_profit_ok":
+            take_profit_ok,
 
-        "duplicate_entry": duplicate_entry,
+        "duplicate_ok":
+            duplicate_ok,
 
-        "quantity": quantity,
+        "no_existing_option":
+            no_existing_option,
 
-        "estimated_cost": estimated_cost,
+        "duplicate_entry":
+            duplicate_entry,
 
-        "max_risk": max_risk,
+        "daily_drawdown":
+            daily_drawdown,
 
-        "stop_loss": stop_loss,
+        "quantity":
+            quantity,
 
-        "take_profit": take_profit,
+        "max_quantity":
+            max_quantity,
 
-        "reason": (
-            "All risk checks passed."
-            if approved
-            else "One or more risk checks failed."
-        ),
+        "estimated_cost":
+            estimated_cost,
+
+        "max_risk":
+            max_risk,
+
+        "max_exposure":
+            max_exposure,
+
+        "stop_loss":
+            stop_loss,
+
+        "take_profit":
+            take_profit,
+
+        "reason":
+            (
+                "All configured risk guards passed."
+                if approved
+                else
+                "One or more risk guards failed."
+            ),
 
     }
 
@@ -1256,56 +1939,49 @@ def submit_paper_order():
     if trading_client is None:
 
         raise RuntimeError(
-            "Alpaca paper client is not connected."
+            "Alpaca paper client unavailable."
         )
 
     if option is None:
 
         raise RuntimeError(
-            "No option has been selected."
+            "No option selected."
         )
 
     if risk is None:
 
         raise RuntimeError(
-            "Risk engine has not been executed."
+            "Risk check has not been run."
         )
 
-    if not risk["approved"]:
+    if not risk.get(
+        "approved",
+        False,
+    ):
 
         raise RuntimeError(
             "Risk engine has not approved this trade."
         )
 
-    # --------------------------------------------------------
-    # DUPLICATE PROTECTION
-    # --------------------------------------------------------
-
-    positions = (
-        trading_client.get_all_positions()
+    existing_positions = (
+        get_positions()
     )
 
-    for position in positions:
+    for position in existing_positions:
 
-        if (
-            getattr(
-                position,
-                "symbol",
-                "",
-            )
-            == option["symbol"]
-        ):
+        symbol = getattr(
+            position,
+            "symbol",
+            "",
+        )
+
+        if symbol == option["symbol"]:
 
             raise RuntimeError(
-                "Duplicate-entry protection blocked "
-                "this order."
+                "Duplicate-entry protection blocked order."
             )
 
-    # --------------------------------------------------------
-    # PAPER MARKET ORDER
-    # --------------------------------------------------------
-
-    order_request = MarketOrderRequest(
+    request = MarketOrderRequest(
 
         symbol=option["symbol"],
 
@@ -1317,11 +1993,45 @@ def submit_paper_order():
 
     )
 
-    order = trading_client.submit_order(
-        order_data=order_request
+    return trading_client.submit_order(
+        order_data=request
     )
 
-    return order
+
+# ============================================================
+# CLOSE POSITION
+# ============================================================
+
+def close_single_position(
+    symbol
+):
+
+    if trading_client is None:
+
+        raise RuntimeError(
+            "Alpaca paper client unavailable."
+        )
+
+    return trading_client.close_position(
+        symbol
+    )
+
+
+# ============================================================
+# EMERGENCY EXIT
+# ============================================================
+
+def emergency_exit_all():
+
+    if trading_client is None:
+
+        raise RuntimeError(
+            "Alpaca paper client unavailable."
+        )
+
+    return trading_client.close_all_positions(
+        cancel_orders=True
+    )
 
 
 # ============================================================
@@ -1359,106 +2069,13 @@ def load_trade_history():
     return pd.DataFrame()
 
 
-trade_history = load_trade_history()
+trade_history = (
+    load_trade_history()
+)
 
 
 # ============================================================
-# ACCOUNT / POSITIONS / ORDERS
-# ============================================================
-
-account = get_account()
-
-positions = []
-
-orders = []
-
-
-if trading_client is not None:
-
-    try:
-
-        positions = (
-            trading_client.get_all_positions()
-        )
-
-    except Exception:
-
-        positions = []
-
-    try:
-
-        if QueryOrderStatus:
-
-            orders = (
-                trading_client.get_orders(
-                    filter=QueryOrderStatus.ALL
-                )
-            )
-
-        else:
-
-            orders = (
-                trading_client.get_orders()
-            )
-
-    except Exception:
-
-        orders = []
-
-
-# ============================================================
-# ACCOUNT VALUES
-# ============================================================
-
-if account:
-
-    equity = safe_float(
-        getattr(
-            account,
-            "equity",
-            0,
-        )
-    )
-
-    cash = safe_float(
-        getattr(
-            account,
-            "cash",
-            0,
-        )
-    )
-
-    buying_power = safe_float(
-        getattr(
-            account,
-            "buying_power",
-            0,
-        )
-    )
-
-    last_equity = safe_float(
-        getattr(
-            account,
-            "last_equity",
-            equity,
-        )
-    )
-
-    day_change = (
-        equity
-        - last_equity
-    )
-
-else:
-
-    equity = 0
-    cash = 0
-    buying_power = 0
-    day_change = 0
-
-
-# ============================================================
-# TRADE STATS
+# STATS
 # ============================================================
 
 def calculate_stats(df):
@@ -1474,9 +2091,11 @@ def calculate_stats(df):
             0,
         )
 
-    pnl_col = find_pnl_column(df)
+    pnl_column = (
+        find_pnl_column(df)
+    )
 
-    if pnl_col is None:
+    if pnl_column is None:
 
         return (
             0,
@@ -1488,7 +2107,7 @@ def calculate_stats(df):
         )
 
     values = pd.to_numeric(
-        df[pnl_col],
+        df[pnl_column],
         errors="coerce",
     ).dropna()
 
@@ -1525,8 +2144,6 @@ def calculate_stats(df):
         wins
         / total
         * 100
-        if total
-        else 0
     )
 
     return (
@@ -1552,64 +2169,147 @@ def calculate_stats(df):
 
 
 # ============================================================
+# LIVE ACCOUNT SNAPSHOT
+# ============================================================
+
+account = get_account()
+
+positions = get_positions()
+
+orders = get_orders()
+
+if account:
+
+    equity = safe_float(
+        getattr(
+            account,
+            "equity",
+            0,
+        )
+    )
+
+    cash = safe_float(
+        getattr(
+            account,
+            "cash",
+            0,
+        )
+    )
+
+    buying_power = safe_float(
+        getattr(
+            account,
+            "buying_power",
+            0,
+        )
+    )
+
+else:
+
+    equity = 0.0
+    cash = 0.0
+    buying_power = 0.0
+
+
+day_pnl = get_day_pnl(
+    account
+)
+
+
+# ============================================================
 # SIDEBAR
 # ============================================================
 
 with st.sidebar:
 
-    st.title("🚀 AlphaPilot AI")
-
-    st.caption(
-        "🤖 Autonomous AI Options Paper Trading"
-    )
-
-    st.divider()
-
-    st.success(
-        "🔒 PAPER TRADING ONLY"
+    st.markdown(
+        "## 🚀 AlphaPilot AI"
     )
 
     st.caption(
-        "Real Alpaca paper account. "
-        "No live-money execution."
+        "Institutional Options Officer"
     )
-
-    st.divider()
-
-    st.subheader("🔄 Demo Pipeline")
-
-    st.caption(
-        "Run each stage sequentially."
-    )
-
-    st.write("1. 📊 Market Analysis")
-
-    st.write("2. 🧠 AI Signal")
-
-    st.write("3. ⚙️ Options Selection")
-
-    st.write("4. 🛡️ Risk Check")
-
-    st.write("5. 🚀 Paper Entry")
-
-    st.write("6. 👁️ Monitoring")
-
-    st.write("7. 🎯 Exit")
 
     st.divider()
 
     if trading_client:
 
-        st.success("🟢 Alpaca Connected")
+        st.success(
+            "🟢 Alpaca PAPER connected"
+        )
 
     else:
 
-        st.error("🔴 Alpaca Offline")
+        st.error(
+            "🔴 Alpaca unavailable"
+        )
+
+    st.divider()
+
+    st.markdown(
+        "### 🎛️ Operating Mode"
+    )
+
+    st.session_state.copilot_mode = (
+        st.toggle(
+            "🧠 Copilot Mode",
+            value=st.session_state.copilot_mode,
+        )
+    )
+
+    st.session_state.autopilot_mode = (
+        st.toggle(
+            "🤖 Autopilot",
+            value=st.session_state.autopilot_mode,
+        )
+    )
+
+    if st.session_state.autopilot_mode:
+
+        st.warning(
+            "Autopilot UI enabled. "
+            "Dashboard does not independently start "
+            "new entry workers."
+        )
+
+    st.divider()
+
+    st.markdown(
+        "### 📌 Quick Navigation"
+    )
+
+    st.markdown(
+        """
+        <a href="#decision">Decision Center</a><br>
+        <a href="#options">Options</a><br>
+        <a href="#risk">Risk</a><br>
+        <a href="#positions">Positions</a><br>
+        <a href="#performance">Performance</a><br>
+        <a href="#status">System Status</a>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.divider()
+
+    st.markdown(
+        "### 🔒 Execution Policy"
+    )
 
     st.caption(
-        now_local().strftime(
-            "Updated %Y-%m-%d %H:%M:%S"
-        )
+        "Paper account only."
+    )
+
+    st.caption(
+        "No live-money routing."
+    )
+
+    st.caption(
+        "Real data only."
+    )
+
+    st.caption(
+        "No fabricated performance."
     )
 
 
@@ -1619,100 +2319,300 @@ with st.sidebar:
 
 st.markdown(
     """
-    <div class="hero-box">
-        <div class="hero-title">
-            🚀 AlphaPilot AI
-        </div>
-        <div class="hero-subtitle">
-            🤖 Live AI-powered autonomous options paper-trading system
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-st.warning(
-    "⚠️ PAPER TRADING ONLY — "
-    "Execution can only reach the connected "
-    "Alpaca PAPER account."
-)
-
-st.markdown(
-    """
-    <div class="pipeline-box">
-        📊 Market Analysis
-        &nbsp;→&nbsp;
-        🧠 AI Signal
-        &nbsp;→&nbsp;
-        ⚙️ Options
-        &nbsp;→&nbsp;
-        🛡️ Risk
-        &nbsp;→&nbsp;
-        🚀 Paper Order
-        &nbsp;→&nbsp;
-        👁️ Monitor
-        &nbsp;→&nbsp;
-        🎯 Exit
-    </div>
-    """,
+""",
     unsafe_allow_html=True,
 )
 
 
 # ============================================================
-# TOP CONTROLS
+# NAV
+# ============================================================
+
+st.markdown(
+    """
+""",
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# PAPER WARNING
+# ============================================================
+
+st.warning(
+    "⚠️ PAPER TRADING ONLY — "
+    "Any order submitted from this dashboard "
+    "can reach the connected Alpaca PAPER account."
+)
+
+
+# ============================================================
+# PIPELINE
+# ============================================================
+
+st.markdown(
+    """
+<div class="pipeline">
+
+    📊 Market
+    &nbsp;→&nbsp;
+    🧠 AI Signal
+    &nbsp;→&nbsp;
+    ⚙️ Options
+    &nbsp;→&nbsp;
+    🛡️ Risk
+    &nbsp;→&nbsp;
+    🚀 Paper Order
+    &nbsp;→&nbsp;
+    👁️ Monitor
+    &nbsp;→&nbsp;
+    🎯 Exit
+
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
+# SETUP & PARAMETERS
+# ============================================================
+
+with st.expander(
+    "⚙️ Setup & Trading Workflow",
+    expanded=False,
+):
+
+    settings = (
+        st.session_state.settings
+    )
+
+    with st.form(
+        "settings_form"
+    ):
+
+        c1, c2, c3 = st.columns(3)
+
+        with c1:
+
+            role = st.selectbox(
+                "Agent Role Mode",
+                [
+                    "Options Officer",
+                    "Risk Officer",
+                    "Market Analyst",
+                ],
+                index=[
+                    "Options Officer",
+                    "Risk Officer",
+                    "Market Analyst",
+                ].index(
+                    settings["role"]
+                ),
+            )
+
+            scan_interval = st.number_input(
+                "Scan Interval (sec)",
+                min_value=10,
+                max_value=3600,
+                value=int(
+                    settings[
+                        "scan_interval"
+                    ]
+                ),
+            )
+
+            tickers = st.text_input(
+                "Target Tickers",
+                value=settings[
+                    "tickers"
+                ],
+            )
+
+        with c2:
+
+            max_position = st.number_input(
+                "Max Position Size %",
+                min_value=0.5,
+                max_value=50.0,
+                value=float(
+                    settings[
+                        "max_position_size_pct"
+                    ]
+                ),
+                step=0.5,
+            )
+
+            max_drawdown = st.number_input(
+                "Max Daily Drawdown %",
+                min_value=0.5,
+                max_value=25.0,
+                value=float(
+                    settings[
+                        "max_daily_drawdown_pct"
+                    ]
+                ),
+                step=0.5,
+            )
+
+            stop_loss = st.number_input(
+                "Stop Loss %",
+                min_value=1.0,
+                max_value=90.0,
+                value=float(
+                    settings[
+                        "stop_loss_pct"
+                    ]
+                ),
+                step=1.0,
+            )
+
+        with c3:
+
+            take_profit = st.number_input(
+                "Take Profit %",
+                min_value=1.0,
+                max_value=200.0,
+                value=float(
+                    settings[
+                        "take_profit_pct"
+                    ]
+                ),
+                step=1.0,
+            )
+
+            trailing_stop = st.number_input(
+                "Trailing Stop %",
+                min_value=0.0,
+                max_value=90.0,
+                value=float(
+                    settings[
+                        "trailing_stop_pct"
+                    ]
+                ),
+                step=1.0,
+            )
+
+            strategy = st.selectbox(
+                "Strategy Selector",
+                [
+                    "Long Call",
+                    "Bull Put Spread",
+                    "Iron Condor",
+                    "Long Put",
+                ],
+                index=[
+                    "Long Call",
+                    "Bull Put Spread",
+                    "Iron Condor",
+                    "Long Put",
+                ].index(
+                    settings["strategy"]
+                ),
+            )
+
+        apply_settings = st.form_submit_button(
+            "✓ APPLY PARAMETERS",
+            use_container_width=True,
+        )
+
+    if apply_settings:
+
+        st.session_state.settings = {
+
+            "role":
+                role,
+
+            "scan_interval":
+                scan_interval,
+
+            "tickers":
+                tickers,
+
+            "max_position_size_pct":
+                max_position,
+
+            "max_daily_drawdown_pct":
+                max_drawdown,
+
+            "stop_loss_pct":
+                stop_loss,
+
+            "take_profit_pct":
+                take_profit,
+
+            "trailing_stop_pct":
+                trailing_stop,
+
+            "strategy":
+                strategy,
+
+        }
+
+        st.success(
+            "Parameters applied to this dashboard session."
+        )
+
+        st.rerun()
+
+    if settings["strategy"] != "Long Call":
+
+        st.warning(
+            "⚠️ Multi-leg strategies are configuration-only "
+            "in this dashboard. Paper execution currently "
+            "supports the implemented Long Call workflow."
+        )
+
+
+# ============================================================
+# LIVE CONTROL CENTER
 # ============================================================
 
 st.header(
     "🎮 Live Trading Controls",
-    anchor=False,
+    anchor="controls",
 )
 
-control1, control2, control3, control4, control5 = st.columns(5)
+b1, b2, b3, b4, b5 = st.columns(5)
 
-
-with control1:
+with b1:
 
     refresh_market = st.button(
         "🔄 Refresh Market",
         use_container_width=True,
     )
 
-
-with control2:
+with b2:
 
     run_ai = st.button(
         "🧠 Run AI Analysis",
         use_container_width=True,
     )
 
-
-with control3:
+with b3:
 
     scan_contracts = st.button(
         "⚙️ Scan Options",
         use_container_width=True,
     )
 
-
-with control4:
+with b4:
 
     run_risk = st.button(
         "🛡️ Run Risk Check",
         use_container_width=True,
     )
 
+with b5:
 
-with control5:
-
-    monitor = st.button(
-        "👁️ Monitor Position",
+    monitor_button = st.button(
+        "👁️ Refresh Positions",
         use_container_width=True,
     )
 
 
 # ============================================================
-# MARKET BUTTON
+# REFRESH MARKET
 # ============================================================
 
 if refresh_market:
@@ -1720,34 +2620,36 @@ if refresh_market:
     try:
 
         with st.spinner(
-            "Fetching fresh SPY market data..."
+            "Fetching fresh SPY data from Alpaca IEX..."
         ):
 
             st.session_state.market_data = (
                 fetch_market_data()
             )
 
-            st.session_state.analysis_timestamp = (
-                now_local()
-            )
+        st.session_state.analysis_timestamp = (
+            datetime.now()
+        )
 
-            st.session_state.market_error = None
+        st.session_state.market_error = None
 
-            st.session_state.ai_decision = None
+        st.session_state.ai_decision = None
 
-            st.session_state.selected_option = None
+        st.session_state.selected_option = None
 
-            st.session_state.option_candidates = []
+        st.session_state.option_candidates = []
 
-            st.session_state.risk_result = None
+        st.session_state.risk_result = None
 
         st.success(
-            "🟢 Fresh SPY market data loaded from Alpaca IEX."
+            "🟢 Fresh SPY market data loaded."
         )
 
     except Exception as exc:
 
-        st.session_state.market_error = str(exc)
+        st.session_state.market_error = str(
+            exc
+        )
 
         st.error(
             f"❌ Market data error: {exc}"
@@ -1755,22 +2657,21 @@ if refresh_market:
 
 
 # ============================================================
-# AI BUTTON
+# AI
 # ============================================================
 
 if run_ai:
 
     try:
 
-        if st.session_state.market_data is None:
+        if (
+            st.session_state.market_data
+            is None
+        ):
 
-            with st.spinner(
-                "Fetching fresh market data..."
-            ):
-
-                st.session_state.market_data = (
-                    fetch_market_data()
-                )
+            st.session_state.market_data = (
+                fetch_market_data()
+            )
 
         st.session_state.ai_decision = (
             calculate_ai_decision(
@@ -1785,31 +2686,37 @@ if run_ai:
         st.session_state.risk_result = None
 
         st.success(
-            "🧠 AI analysis completed using real market data."
+            "🧠 AI decision generated from fresh market data."
         )
 
     except Exception as exc:
 
         st.error(
-            f"❌ AI analysis error: {exc}"
+            f"❌ AI analysis failed: {exc}"
         )
 
 
 # ============================================================
-# OPTIONS BUTTON
+# OPTION SCAN
 # ============================================================
 
 if scan_contracts:
 
     try:
 
-        if st.session_state.market_data is None:
+        if (
+            st.session_state.market_data
+            is None
+        ):
 
             st.session_state.market_data = (
                 fetch_market_data()
             )
 
-        if st.session_state.ai_decision is None:
+        if (
+            st.session_state.ai_decision
+            is None
+        ):
 
             st.session_state.ai_decision = (
                 calculate_ai_decision(
@@ -1817,24 +2724,27 @@ if scan_contracts:
                 )
             )
 
-        if (
-            st.session_state.ai_decision["signal"]
-            != "BUY"
-        ):
+        decision_now = (
+            st.session_state.ai_decision
+        )
+
+        if decision_now["signal"] != "BUY":
 
             st.session_state.selected_option = None
+
+            st.session_state.option_candidates = []
 
             st.session_state.risk_result = None
 
             st.warning(
-                "🟡 Options scan blocked because "
-                "the current AI signal is NO TRADE."
+                "🟡 Options scan blocked — "
+                "current AI signal is NO TRADE."
             )
 
         else:
 
             with st.spinner(
-                "Scanning live SPY option contracts..."
+                "Scanning live SPY CALL contracts..."
             ):
 
                 selected, candidates = (
@@ -1843,16 +2753,6 @@ if scan_contracts:
                     )
                 )
 
-                option_price = get_option_price(
-                    selected["symbol"]
-                )
-
-            selected["price"] = option_price
-
-            selected["quantity"] = (
-                DEFAULT_CONTRACT_QTY
-            )
-
             st.session_state.selected_option = selected
 
             st.session_state.option_candidates = candidates
@@ -1860,31 +2760,37 @@ if scan_contracts:
             st.session_state.risk_result = None
 
             st.success(
-                "🟢 Live option scan completed."
+                "🟢 Live option selection completed."
             )
 
     except Exception as exc:
 
         st.error(
-            f"❌ Option scan error: {exc}"
+            f"❌ Option scanner error: {exc}"
         )
 
 
 # ============================================================
-# RISK BUTTON
+# RISK
 # ============================================================
 
 if run_risk:
 
     try:
 
-        if st.session_state.market_data is None:
+        if (
+            st.session_state.market_data
+            is None
+        ):
 
             st.session_state.market_data = (
                 fetch_market_data()
             )
 
-        if st.session_state.ai_decision is None:
+        if (
+            st.session_state.ai_decision
+            is None
+        ):
 
             st.session_state.ai_decision = (
                 calculate_ai_decision(
@@ -1892,42 +2798,9 @@ if run_risk:
                 )
             )
 
-        if (
-            st.session_state.ai_decision["signal"]
-            != "BUY"
-        ):
-
-            st.session_state.risk_result = {
-
-                "approved": False,
-
-                "reason": (
-                    "AI signal is NO TRADE."
-                ),
-
-            }
-
-        elif st.session_state.selected_option is None:
-
-            st.session_state.risk_result = {
-
-                "approved": False,
-
-                "reason": (
-                    "No option contract has been selected."
-                ),
-
-            }
-
-        else:
-
-            with st.spinner(
-                "Running live account risk checks..."
-            ):
-
-                st.session_state.risk_result = (
-                    run_risk_check()
-                )
+        st.session_state.risk_result = (
+            run_risk_check()
+        )
 
     except Exception as exc:
 
@@ -1937,33 +2810,43 @@ if run_risk:
 
 
 # ============================================================
-# LIVE AI DECISION
+# DECISION CENTER
 # ============================================================
+
+st.markdown(
+    '<div id="decision"></div>',
+    unsafe_allow_html=True,
+)
 
 st.divider()
 
 st.header(
-    "🧠 LIVE AI DECISION",
+    "🧠 Decision Center",
     anchor=False,
 )
 
-market = st.session_state.market_data
+market = (
+    st.session_state.market_data
+)
 
-decision = st.session_state.ai_decision
+decision = (
+    st.session_state.ai_decision
+)
 
 
 if market is None:
 
     st.info(
-        "📌 Click Refresh Market to load fresh SPY data, "
-        "then run AI Analysis."
+        "Run Market Refresh or AI Analysis "
+        "to load live SPY decision data."
     )
 
 else:
 
     st.caption(
-        "🕒 Fresh market data: "
-        + market["timestamp"].strftime(
+        "Fresh market timestamp: "
+        +
+        market["timestamp"].strftime(
             "%Y-%m-%d %H:%M:%S"
         )
     )
@@ -1973,43 +2856,164 @@ else:
     with m1:
 
         st.metric(
-            "📍 SPY",
-            money(market["price"]),
+            "SPY",
+            money(
+                market["price"]
+            ),
         )
 
     with m2:
 
         st.metric(
-            "📊 SMA20",
-            money(market["sma20"]),
+            "SMA20",
+            money(
+                market["sma20"]
+            ),
         )
 
     with m3:
 
         st.metric(
-            "📈 SMA50",
-            money(market["sma50"]),
+            "SMA50",
+            money(
+                market["sma50"]
+            ),
         )
 
     with m4:
 
         st.metric(
-            "💪 RSI",
+            "RSI",
             f"{market['rsi']:.2f}",
         )
 
     with m5:
 
-        macd_state = (
-            "🟢 Bullish"
-            if market["bullish_macd"]
-            else "🔴 Bearish"
+        st.metric(
+            "MACD",
+            (
+                "🟢 Bullish"
+                if market["bullish_macd"]
+                else
+                "🔴 Bearish"
+            ),
         )
 
+
+if decision is not None:
+
+    st.markdown(
+        "<br>",
+        unsafe_allow_html=True,
+    )
+
+    d1, d2 = st.columns(
+        [1.4, 1]
+    )
+
+    with d1:
+
+        if (
+            decision["signal"]
+            == "BUY"
+        ):
+
+            st.markdown(
+                f"""
+                <div class="signal-buy">
+
+                    <div class="signal-title">
+                        🟢 BUY SIGNAL
+                    </div>
+
+                    <div class="small-muted">
+                        Technical conditions meet
+                        the configured confidence threshold.
+                    </div>
+
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        else:
+
+            st.markdown(
+                f"""
+                <div class="signal-no-trade">
+
+                    <div class="signal-title">
+                        🔴 NO TRADE
+                    </div>
+
+                    <div class="small-muted">
+                        Current conditions do not meet
+                        the minimum confidence requirement.
+                    </div>
+
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    with d2:
+
         st.metric(
-            "📉 MACD",
-            macd_state,
+            "Signal Confidence",
+            f"{decision['confidence']:.0f}%",
+            help=(
+                "This is technical-rule confidence, "
+                "not a calibrated probability of profit."
+            ),
         )
+
+    st.markdown(
+        "### 🔍 Signal Evidence"
+    )
+
+    e1, e2 = st.columns(2)
+
+    check_items = list(
+        decision["checks"].items()
+    )
+
+    with e1:
+
+        for label, passed in check_items[:3]:
+
+            if passed:
+
+                st.success(
+                    f"PASS — {label}"
+                )
+
+            else:
+
+                st.error(
+                    f"FAIL — {label}"
+                )
+
+    with e2:
+
+        for label, passed in check_items[3:]:
+
+            if passed:
+
+                st.success(
+                    f"PASS — {label}"
+                )
+
+            else:
+
+                st.error(
+                    f"FAIL — {label}"
+                )
+
+    st.caption(
+        f"{decision['passed']} / "
+        f"{decision['total']} conditions passed. "
+        f"Required confidence: {MIN_CONFIDENCE}%."
+    )
 
     trend_col, volume_col = st.columns(2)
 
@@ -2043,290 +3047,414 @@ else:
 
 
 # ============================================================
-# AI SIGNAL
+# COPILOT RECOMMENDATION
 # ============================================================
 
-if decision is not None:
-
-    st.divider()
-
-    st.subheader(
-        "🤖 AI SIGNAL",
-        anchor=False,
-    )
-
-    signal_col, confidence_col = st.columns(2)
-
-    with signal_col:
-
-        if decision["signal"] == "BUY":
-
-            st.success(
-                "🟢 BUY"
-            )
-
-        else:
-
-            st.error(
-                "🔴 NO TRADE"
-            )
-
-    with confidence_col:
-
-        st.metric(
-            "🎯 Confidence",
-            f"{decision['confidence']:.0f}%",
-        )
-
-    st.subheader(
-        "🔍 Why?",
-        anchor=False,
-    )
-
-    for label, passed in decision["checks"].items():
-
-        if passed:
-
-            st.success(
-                f"✅ PASS — {label}"
-            )
-
-        else:
-
-            st.error(
-                f"❌ FAIL — {label}"
-            )
-
-    st.caption(
-        f"{decision['passed']} / "
-        f"{decision['total']} conditions passed. "
-        f"Minimum confidence: {MIN_CONFIDENCE}%."
-    )
-
-
-# ============================================================
-# OPTIONS SELECTION
-# ============================================================
-
-st.divider()
-
-st.header(
-    "⚙️ SELECTED OPTION",
-    anchor=False,
+st.subheader(
+    "🤖 Copilot Trade Recommendation"
 )
 
-option = st.session_state.selected_option
+option = (
+    st.session_state.selected_option
+)
 
 
-if option is None:
+if (
+    st.session_state.copilot_mode
+    and decision is not None
+    and decision["signal"] == "BUY"
+    and option is not None
+):
 
-    st.info(
-        "📌 No contract selected yet. "
-        "Run AI Analysis and then Scan Options."
+    policy_rr = (
+        st.session_state.settings[
+            "take_profit_pct"
+        ]
+        /
+        st.session_state.settings[
+            "stop_loss_pct"
+        ]
+    )
+
+    st.markdown(
+        f"""
+<div class="recommendation">
+
+    <div class="recommendation-title">
+        🎯 Proposed Paper Trade
+    </div>
+
+    <br>
+
+    <b>Ticker:</b> SPY<br>
+    <b>Contract:</b> {option['symbol']}<br>
+    <b>Strike:</b> {money(option['strike'])}<br>
+    <b>Expiry:</b> {option['expiration']}<br>
+    <b>Option Type:</b> CALL<br>
+    <b>Signal Confidence:</b>
+        {decision['confidence']:.0f}%<br>
+    <b>Policy Risk/Reward:</b>
+        {policy_rr:.2f}:1<br>
+    <b>Estimated Win Probability:</b>
+        Not calibrated
+
+    <br><br>
+
+    <span class="small-muted">
+        Win probability is intentionally not fabricated.
+        The current system produces technical confidence,
+        not a statistically calibrated probability of profit.
+    </span>
+
+</div>
+""",
+        unsafe_allow_html=True,
     )
 
 else:
 
-    option_col1, option_col2, option_col3 = st.columns(3)
-
-    with option_col1:
-
-        st.metric(
-            "🎫 Contract",
-            option["symbol"],
-        )
-
-        st.metric(
-            "💵 Strike",
-            money(option["strike"]),
-        )
-
-    with option_col2:
-
-        st.metric(
-            "📅 Expiration",
-            str(option["expiration"]),
-        )
-
-        st.metric(
-            "⏳ Days to Expiry",
-            option["dte"],
-        )
-
-    with option_col3:
-
-        st.metric(
-            "📊 Open Interest",
-            option["open_interest"],
-        )
-
-        st.metric(
-            "⭐ Selection Score",
-            f"{option['score']:.2f}/100",
-        )
-
-    st.metric(
-        "💰 Current Option Price",
-        money(option["price"]),
+    st.info(
+        "Copilot recommendation will appear only "
+        "after a BUY signal and valid option selection."
     )
 
 
 # ============================================================
-# OPTION CANDIDATES
+# OPTIONS
 # ============================================================
 
-if st.session_state.option_candidates:
+st.markdown(
+    '<div id="options"></div>',
+    unsafe_allow_html=True,
+)
+
+st.divider()
+
+st.header(
+    "⚙️ Option Selection",
+    anchor=False,
+)
+
+if option is None:
+
+    st.info(
+        "No contract selected. "
+        "A valid BUY signal is required before "
+        "the live SPY option scanner can select a contract."
+    )
+
+else:
+
+    o1, o2, o3, o4 = st.columns(4)
+
+    with o1:
+
+        st.metric(
+            "Contract",
+            option["symbol"],
+        )
+
+    with o2:
+
+        st.metric(
+            "Strike",
+            money(
+                option["strike"]
+            ),
+        )
+
+    with o3:
+
+        st.metric(
+            "Expiry",
+            str(
+                option["expiration"]
+            ),
+        )
+
+    with o4:
+
+        st.metric(
+            "DTE",
+            option["dte"],
+        )
+
+    o5, o6, o7, o8 = st.columns(4)
+
+    with o5:
+
+        st.metric(
+            "CALL",
+            "Long",
+        )
+
+    with o6:
+
+        st.metric(
+            "Open Interest",
+            option[
+                "open_interest"
+            ],
+        )
+
+    with o7:
+
+        st.metric(
+            "Selection Score",
+            f"{option['score']:.2f}",
+        )
+
+    with o8:
+
+        st.metric(
+            "Option Price",
+            money(
+                option.get(
+                    "price",
+                    0,
+                )
+            ),
+        )
+
+
+# ============================================================
+# CANDIDATES
+# ============================================================
+
+if (
+    st.session_state.option_candidates
+):
 
     with st.expander(
-        "📋 View Option Candidates"
+        "📋 Active Option Candidates"
     ):
 
         candidate_df = pd.DataFrame(
             st.session_state.option_candidates
         )
 
+        columns = [
+            "symbol",
+            "strike",
+            "expiration",
+            "dte",
+            "open_interest",
+            "score",
+        ]
+
         candidate_df = candidate_df[
             [
-                "symbol",
-                "strike",
-                "expiration",
-                "dte",
-                "open_interest",
-                "score",
+                c
+                for c in columns
+                if c in candidate_df.columns
             ]
         ]
 
-        # Static table instead of interactive dataframe.
-        # This avoids canvas-like rendering artifacts.
-        st.table(candidate_df)
+        st.dataframe(
+            candidate_df,
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 # ============================================================
-# RISK CHECK
+# RISK
 # ============================================================
+
+st.markdown(
+    '<div id="risk"></div>',
+    unsafe_allow_html=True,
+)
 
 st.divider()
 
 st.header(
-    "🛡️ RISK CHECK",
+    "🛡️ Risk Guards",
     anchor=False,
 )
 
-risk = st.session_state.risk_result
+risk = (
+    st.session_state.risk_result
+)
 
 
 if risk is None:
 
     st.info(
-        "📌 Run Risk Check after selecting an option."
+        "Run Risk Check after a contract has been selected."
     )
 
 else:
 
-    if risk["approved"]:
+    if risk.get(
+        "approved",
+        False,
+    ):
 
-        st.success(
-            "✅ FINAL: APPROVED"
+        st.markdown(
+            """
+            <div class="success-box">
+
+                <b>🟢 FINAL RISK DECISION: APPROVED</b>
+
+                <br>
+
+                All configured guards passed.
+
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
     else:
 
-        st.error(
-            "❌ FINAL: REJECTED"
+        st.markdown(
+            """
+            <div class="lock-box">
+
+                <b>🔴 FINAL RISK DECISION: REJECTED</b>
+
+                <br>
+
+                One or more guards failed.
+
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
-    if "position_size_ok" in risk:
+    r1, r2, r3, r4 = st.columns(4)
 
-        r1, r2, r3, r4, r5 = st.columns(5)
+    with r1:
 
-        with r1:
-
-            st.metric(
-                "📦 Position Size",
+        st.metric(
+            "Position Size",
+            (
                 "PASS"
-                if risk["position_size_ok"]
-                else "FAIL",
-            )
-
-        with r2:
-
-            st.metric(
-                "📊 Exposure",
-                "PASS"
-                if risk["exposure_ok"]
-                else "FAIL",
-            )
-
-        with r3:
-
-            st.metric(
-                "🛑 Stop Loss",
-                "PASS"
-                if risk["stop_loss_ok"]
-                else "FAIL",
-            )
-
-        with r4:
-
-            st.metric(
-                "🎯 Take Profit",
-                "PASS"
-                if risk["take_profit_ok"]
-                else "FAIL",
-            )
-
-        with r5:
-
-            st.metric(
-                "🔒 Duplicate Entry",
-                "PASS"
-                if risk["duplicate_ok"]
-                else "BLOCKED",
-            )
-
-        st.write(
-            f"🔢 Quantity: **{risk['quantity']}**"
+                if risk.get(
+                    "position_size_ok",
+                    False,
+                )
+                else
+                "FAIL"
+            ),
         )
 
-        st.write(
-            "💵 Estimated cost: "
-            f"**{money(risk['estimated_cost'])}**"
+    with r2:
+
+        st.metric(
+            "Account Risk",
+            (
+                "PASS"
+                if risk.get(
+                    "account_risk_ok",
+                    False,
+                )
+                else
+                "FAIL"
+            ),
         )
 
-        st.write(
-            "🛡️ Maximum configured risk: "
-            f"**{money(risk['max_risk'])}**"
+    with r3:
+
+        st.metric(
+            "Daily Drawdown",
+            (
+                "PASS"
+                if risk.get(
+                    "daily_drawdown_ok",
+                    False,
+                )
+                else
+                "BLOCKED"
+            ),
         )
 
-        st.write(
-            "🛑 Stop Loss reference: "
-            f"**{money(risk['stop_loss'])}**"
+    with r4:
+
+        st.metric(
+            "Duplicate Guard",
+            (
+                "PASS"
+                if risk.get(
+                    "duplicate_ok",
+                    False,
+                )
+                else
+                "BLOCKED"
+            ),
         )
 
-        st.write(
-            "🎯 Take Profit reference: "
-            f"**{money(risk['take_profit'])}**"
+    r5, r6, r7, r8 = st.columns(4)
+
+    with r5:
+
+        st.metric(
+            "Quantity",
+            risk.get(
+                "quantity",
+                0,
+            ),
+        )
+
+    with r6:
+
+        st.metric(
+            "Estimated Cost",
+            money(
+                risk.get(
+                    "estimated_cost",
+                    0,
+                )
+            ),
+        )
+
+    with r7:
+
+        st.metric(
+            "Stop Loss",
+            money(
+                risk.get(
+                    "stop_loss",
+                    0,
+                )
+            ),
+        )
+
+    with r8:
+
+        st.metric(
+            "Take Profit",
+            money(
+                risk.get(
+                    "take_profit",
+                    0,
+                )
+            ),
         )
 
     st.caption(
-        risk["reason"]
+        risk.get(
+            "reason",
+            "",
+        )
     )
 
 
 # ============================================================
-# PAPER ORDER
+# PAPER EXECUTION
 # ============================================================
 
 st.divider()
 
 st.header(
-    "🚀 ALPACA PAPER ORDER",
+    "🚀 Alpaca Paper Execution",
     anchor=False,
 )
 
 st.error(
-    "⚠️ PAPER TRADING ONLY — "
-    "This control can submit an actual order "
+    "⚠️ REAL PAPER ORDER CONTROL — "
+    "Submitting this order sends an actual order "
     "to the connected Alpaca PAPER account."
 )
 
@@ -2350,106 +3478,127 @@ order_ready = (
 
 if not order_ready:
 
-    st.info(
-        "🔒 Order locked. Required: "
-        "BUY signal + selected option + approved risk check."
+    st.markdown(
+        """
+        <div class="lock-box">
+
+            🔒 <b>ORDER LOCKED</b>
+
+            <br><br>
+
+            Required:
+
+            BUY signal →
+            selected option →
+            approved risk check
+
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 else:
 
-    confirm = st.checkbox(
-        "I confirm this will submit an order "
-        "to my Alpaca PAPER account.",
+    confirmation = st.checkbox(
+        "I understand this submits an order to my Alpaca PAPER account.",
         key="paper_order_confirmation",
     )
 
-    submit_order = st.button(
+    submit = st.button(
         "🚀 SUBMIT PAPER ORDER",
         type="primary",
-        disabled=not confirm,
+        disabled=not confirmation,
         use_container_width=True,
     )
 
-    if submit_order:
+    if submit:
 
         try:
 
             with st.spinner(
-                "Submitting paper order to Alpaca..."
+                "Submitting paper order..."
             ):
 
-                order = submit_paper_order()
+                order = (
+                    submit_paper_order()
+                )
 
-            st.session_state.last_order = order
+            st.session_state.last_order = (
+                order
+            )
 
             st.success(
-                "🟢 Paper order submitted successfully."
+                "🟢 Paper order submitted to Alpaca."
             )
 
         except Exception as exc:
 
             st.error(
-                f"❌ Paper order was not submitted: {exc}"
+                f"❌ Order rejected: {exc}"
             )
 
 
 # ============================================================
-# ORDER RESULT
+# LATEST ORDER
 # ============================================================
 
-if st.session_state.last_order is not None:
-
-    order = st.session_state.last_order
+if (
+    st.session_state.last_order
+    is not None
+):
 
     st.subheader(
-        "📦 Latest Paper Order",
-        anchor=False,
+        "📦 Latest Paper Order"
     )
 
-    order_col1, order_col2, order_col3, order_col4 = st.columns(4)
+    latest_order = (
+        st.session_state.last_order
+    )
 
-    with order_col1:
+    q1, q2, q3, q4 = st.columns(4)
+
+    with q1:
 
         st.metric(
-            "📊 Status",
+            "Status",
             enum_text(
                 getattr(
-                    order,
+                    latest_order,
                     "status",
                     "",
                 )
             ).upper(),
         )
 
-    with order_col2:
+    with q2:
 
         st.metric(
-            "🎫 Symbol",
+            "Symbol",
             getattr(
-                order,
+                latest_order,
                 "symbol",
                 "",
             ),
         )
 
-    with order_col3:
+    with q3:
 
         st.metric(
-            "🔢 Quantity",
+            "Quantity",
             getattr(
-                order,
+                latest_order,
                 "qty",
                 "",
             ),
         )
 
-    with order_col4:
+    with q4:
 
         st.metric(
-            "💵 Filled Price",
+            "Filled Price",
             money(
                 getattr(
-                    order,
+                    latest_order,
                     "filled_avg_price",
                     0,
                 )
@@ -2457,10 +3606,11 @@ if st.session_state.last_order is not None:
         )
 
     st.caption(
-        "🆔 Order ID: "
-        + str(
+        "Order ID: "
+        +
+        str(
             getattr(
-                order,
+                latest_order,
                 "id",
                 "",
             )
@@ -2469,335 +3619,299 @@ if st.session_state.last_order is not None:
 
 
 # ============================================================
-# LIVE POSITION MONITOR
+# POSITION MANAGER
 # ============================================================
+
+st.markdown(
+    '<div id="positions"></div>',
+    unsafe_allow_html=True,
+)
 
 st.divider()
 
 st.header(
-    "👁️ LIVE POSITION MONITOR",
+    "👁️ Position Manager",
     anchor=False,
 )
 
-if monitor:
+active_option_positions = []
 
-    account = get_account()
+for position in positions:
+
+    symbol = getattr(
+        position,
+        "symbol",
+        "",
+    )
+
+    asset_class = enum_text(
+        getattr(
+            position,
+            "asset_class",
+            "",
+        )
+    )
+
+    if (
+        asset_class == "us_option"
+        or symbol.startswith("SPY")
+    ):
+
+        active_option_positions.append(
+            position
+        )
+
+
+tab_active, tab_closed = st.tabs(
+    [
+        f"Active Contracts ({len(active_option_positions)})",
+        "Closed Trades / Realized P&L",
+    ]
+)
+
+
+# ============================================================
+# ACTIVE CONTRACTS
+# ============================================================
+
+with tab_active:
+
+    if not active_option_positions:
+
+        st.info(
+            "No active SPY option contracts."
+        )
+
+    else:
+
+        rows = []
+
+        for position in active_option_positions:
+
+            symbol = getattr(
+                position,
+                "symbol",
+                "",
+            )
+
+            qty = getattr(
+                position,
+                "qty",
+                "",
+            )
+
+            entry = safe_float(
+                getattr(
+                    position,
+                    "avg_entry_price",
+                    0,
+                )
+            )
+
+            current = safe_float(
+                getattr(
+                    position,
+                    "current_price",
+                    0,
+                )
+            )
+
+            unrealized = safe_float(
+                getattr(
+                    position,
+                    "unrealized_pl",
+                    0,
+                )
+            )
+
+            return_pct = (
+                safe_float(
+                    getattr(
+                        position,
+                        "unrealized_plpc",
+                        0,
+                    )
+                )
+                * 100
+            )
+
+            rows.append(
+                {
+                    "Contract":
+                        symbol,
+
+                    "Quantity":
+                        qty,
+
+                    "Entry":
+                        money(entry),
+
+                    "Current":
+                        money(current),
+
+                    "Unrealized P&L":
+                        money(unrealized),
+
+                    "Return":
+                        pct(return_pct),
+
+                    "Action":
+                        "Managed",
+                }
+            )
+
+        st.dataframe(
+            pd.DataFrame(rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.caption(
+            "Positions are sourced directly from the Alpaca PAPER account."
+        )
+
+        st.warning(
+            "Manual position closing is available below. "
+            "Use carefully if the automatic exit worker is also running."
+        )
+
+        for position in active_option_positions:
+
+            symbol = getattr(
+                position,
+                "symbol",
+                "",
+            )
+
+            with st.expander(
+                f"Manage {symbol}"
+            ):
+
+                confirm_close = st.checkbox(
+                    "Confirm I want to close this paper position.",
+                    key=f"confirm_close_{symbol}",
+                )
+
+                if st.button(
+                    f"Close {symbol}",
+                    key=f"close_{symbol}",
+                    disabled=not confirm_close,
+                    use_container_width=True,
+                ):
+
+                    try:
+
+                        close_single_position(
+                            symbol
+                        )
+
+                        st.success(
+                            f"Close request submitted for {symbol}."
+                        )
+
+                    except Exception as exc:
+
+                        st.error(
+                            f"Close request failed: {exc}"
+                        )
+
+
+# ============================================================
+# CLOSED TRADES
+# ============================================================
+
+with tab_closed:
+
+    if trade_history.empty:
+
+        st.info(
+            "No completed trade-history records."
+        )
+
+    else:
+
+        st.caption(
+            "Source: agents/trade_history.csv"
+        )
+
+        st.dataframe(
+            trade_history,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+# ============================================================
+# EMERGENCY EXIT
+# ============================================================
+
+st.subheader(
+    "🚨 Emergency Exit All Positions"
+)
+
+st.markdown(
+    """
+<div class="warning-box">
+
+<b>HIGH-IMPACT PAPER ACTION</b>
+
+<br>
+
+This action closes all positions in the connected
+Alpaca PAPER account and cancels open orders.
+
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+emergency_confirm = st.checkbox(
+    "I understand this will close ALL paper positions and cancel open orders.",
+    key="emergency_confirmation",
+)
+
+if st.button(
+    "🚨 CLOSE ALL PAPER POSITIONS",
+    disabled=not emergency_confirm,
+    use_container_width=True,
+):
 
     try:
 
-        positions = (
-            trading_client.get_all_positions()
-            if trading_client
-            else []
-        )
+        with st.spinner(
+            "Closing all paper positions..."
+        ):
+
+            result = emergency_exit_all()
 
         st.success(
-            "🟢 Monitoring data refreshed from Alpaca."
+            "Emergency close request submitted."
+        )
+
+        st.write(
+            result
         )
 
     except Exception as exc:
 
-        positions = []
-
         st.error(
-            f"❌ Monitoring error: {exc}"
+            f"Emergency exit failed: {exc}"
         )
-
-
-if positions:
-
-    for position in positions:
-
-        symbol = getattr(
-            position,
-            "symbol",
-            "",
-        )
-
-        current_price = safe_float(
-            getattr(
-                position,
-                "current_price",
-                0,
-            )
-        )
-
-        entry_price = safe_float(
-            getattr(
-                position,
-                "avg_entry_price",
-                0,
-            )
-        )
-
-        unrealized = safe_float(
-            getattr(
-                position,
-                "unrealized_pl",
-                0,
-            )
-        )
-
-        unrealized_pct = safe_float(
-            getattr(
-                position,
-                "unrealized_plpc",
-                0,
-            )
-        )
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        with c1:
-
-            st.metric(
-                "🎫 Contract",
-                symbol,
-            )
-
-        with c2:
-
-            st.metric(
-                "📥 Entry",
-                money(entry_price),
-            )
-
-        with c3:
-
-            st.metric(
-                "📈 Current",
-                money(current_price),
-            )
-
-        with c4:
-
-            # IMPORTANT:
-            # No delta= here.
-            # This removes Streamlit's SVG delta artifact.
-            st.metric(
-                "💰 Unrealized P&L",
-                money(unrealized),
-            )
-
-            st.caption(
-                "📊 Unrealized return: "
-                f"{pct(unrealized_pct * 100)}"
-            )
-
-else:
-
-    st.info(
-        "📭 No open option positions in the Alpaca paper account."
-    )
-
-# ============================================================
-# AUTOMATIC EXIT ENGINE
-# ============================================================
-
-st.subheader("🛑 Automatic Exit Engine")
-
-st.caption(
-    "AlphaPilot continuously checks open paper positions "
-    "against Stop Loss and Take Profit rules."
-)
-
-if st.button(
-    "🛑 RUN EXIT ENGINE",
-    use_container_width=True
-):
-
-    with st.spinner("Checking positions and exit conditions..."):
-
-        try:
-
-            exit_results = monitor_positions()
-
-            if not exit_results:
-
-                st.info("No monitored open positions found.")
-
-            else:
-
-                for result in exit_results:
-
-                    symbol = result.get("symbol", "Unknown")
-                    status = result.get("status", "MONITORING")
-                    reason = result.get("exit_reason")
-
-                    entry = result.get("entry_price", 0)
-                    current = result.get("current_price", 0)
-                    stop = result.get("stop_price", 0)
-                    target = result.get("target_price", 0)
-                    return_pct = result.get("return_pct", 0)
-
-                    st.markdown(f"### {symbol}")
-
-                    col1, col2, col3, col4 = st.columns(4)
-
-                    with col1:
-                        st.metric(
-                            "Entry",
-                            f"${entry:.2f}"
-                        )
-
-                    with col2:
-                        st.metric(
-                            "Current",
-                            f"${current:.2f}"
-                        )
-
-                    with col3:
-                        st.metric(
-                            "Stop Loss",
-                            f"${stop:.2f}"
-                        )
-
-                    with col4:
-                        st.metric(
-                            "Take Profit",
-                            f"${target:.2f}"
-                        )
-
-                    st.write(
-                        f"**Current Return:** {return_pct:.2f}%"
-                    )
-
-                    if status == "MARKET_CLOSED":
-
-                        st.warning(
-                            f"⏰ Market closed — {reason} detected. "
-                            "SELL order was not submitted. "
-                            "Exit saved for the next market session."
-                        )
-
-                    elif status == "EXIT_SUBMITTED":
-
-                        st.success(
-                            f"🚀 {reason} — Paper SELL order submitted."
-                        )
-
-                        if result.get("order_id"):
-
-                            st.write(
-                                f"**Order ID:** "
-                                f"{result['order_id']}"
-                            )
-
-                    elif status == "EXIT_ALREADY_SUBMITTED":
-
-                        st.info(
-                            "🔒 Exit order already submitted. "
-                            "Duplicate SELL prevented."
-                        )
-
-                    elif reason is None:
-
-                        st.success(
-                            "🟢 Position within risk limits."
-                        )
-
-                    else:
-
-                        st.error(
-                            f"Exit status: {status}"
-                        )
-
-        except Exception as error:
-
-            st.error(
-                f"Exit Engine Error: {error}"
-            )
-
-# ============================================================
-# CURRENT ACCOUNT
-# ============================================================
-
-st.divider()
-
-st.header(
-    "📊 Trading Overview",
-    anchor=False,
-)
-
-a1, a2, a3, a4 = st.columns(4)
-
-with a1:
-
-    # IMPORTANT:
-    # No delta= here.
-    st.metric(
-        "💰 Account Equity",
-        money(equity),
-    )
-
-    st.caption(
-        "📅 Day P&L: "
-        f"{money(day_change)}"
-    )
-
-with a2:
-
-    st.metric(
-        "💵 Cash",
-        money(cash),
-    )
-
-with a3:
-
-    st.metric(
-        "⚡ Buying Power",
-        money(buying_power),
-    )
-
-with a4:
-
-    st.metric(
-        "📂 Open Positions",
-        len(positions),
-    )
-
-
-# ============================================================
-# TRADE HISTORY
-# ============================================================
-
-st.divider()
-
-st.header(
-    "📜 Trade History",
-    anchor=False,
-)
-
-if not trade_history.empty:
-
-    source = (
-        "agents/trade_history.csv"
-        if TRADE_HISTORY.exists()
-        else "logs/trades.csv"
-    )
-
-    st.caption(
-        f"📁 Source: {source}"
-    )
-
-    # Static table instead of interactive dataframe.
-    st.table(trade_history)
-
-else:
-
-    st.info(
-        "📭 No completed trade-history records available."
-    )
 
 
 # ============================================================
 # PERFORMANCE
 # ============================================================
 
+st.markdown(
+    '<div id="performance"></div>',
+    unsafe_allow_html=True,
+)
+
 st.divider()
 
 st.header(
-    "📈 Performance",
+    "📈 Performance Intelligence",
     anchor=False,
 )
 
@@ -2806,60 +3920,72 @@ p1, p2, p3, p4, p5 = st.columns(5)
 with p1:
 
     st.metric(
-        "💰 Total P&L",
-        money(total_pnl),
+        "Total P&L",
+        money(
+            total_pnl
+        ),
     )
 
 with p2:
 
     st.metric(
-        "📊 Average P&L",
-        money(average_pnl),
+        "Average P&L",
+        money(
+            average_pnl
+        ),
     )
 
 with p3:
 
     st.metric(
-        "🟢 Winning Trades",
+        "Winning Trades",
         winning_trades,
     )
 
 with p4:
 
     st.metric(
-        "🔴 Losing Trades",
+        "Losing Trades",
         losing_trades,
     )
 
 with p5:
 
     st.metric(
-        "🎯 Win Rate",
-        pct(win_rate),
+        "Win Rate",
+        pct(
+            win_rate
+        ),
     )
 
 
-# ============================================================
-# P&L BREAKDOWN
-# ============================================================
-
-pnl_column = find_pnl_column(
-    trade_history
+pnl_column = (
+    find_pnl_column(
+        trade_history
+    )
 )
+
 
 if pnl_column:
 
-    pnl_df = trade_history.copy()
-
-    pnl_df[pnl_column] = pd.to_numeric(
-        pnl_df[pnl_column],
-        errors="coerce",
+    pnl_df = (
+        trade_history.copy()
     )
 
-    pnl_df = pnl_df.dropna(
-        subset=[
-            pnl_column
-        ]
+    pnl_df[pnl_column] = (
+        pd.to_numeric(
+            pnl_df[pnl_column],
+            errors="coerce",
+        )
+    )
+
+    pnl_df = (
+        pnl_df
+        .dropna(
+            subset=[
+                pnl_column
+            ]
+        )
     )
 
     if not pnl_df.empty:
@@ -2889,27 +4015,30 @@ if pnl_column:
         ]
 
         display_pnl["Trade P&L"] = (
-            display_pnl["Trade P&L"]
-            .map(money)
+            display_pnl[
+                "Trade P&L"
+            ].map(money)
         )
 
         display_pnl["Cumulative P&L"] = (
-            display_pnl["Cumulative P&L"]
-            .map(money)
+            display_pnl[
+                "Cumulative P&L"
+            ].map(money)
         )
 
         st.subheader(
-            "📊 P&L Breakdown",
-            anchor=False,
+            "📊 Realized P&L Breakdown"
         )
 
-        # Static table instead of interactive dataframe.
-        st.table(display_pnl)
+        st.dataframe(
+            display_pnl,
+            use_container_width=True,
+            hide_index=True,
+        )
 
         st.caption(
-            "🔒 Performance shown above is derived only "
-            "from recorded trade-history data. "
-            "No simulated or fabricated results are displayed."
+            "🔒 Performance is calculated only from recorded trade-history data. "
+            "No simulated or fabricated results are included."
         )
 
 
@@ -2920,100 +4049,76 @@ if pnl_column:
 st.divider()
 
 st.header(
-    "🧠 Why AlphaPilot Made This Decision",
+    "🧠 Explainable AI",
     anchor=False,
 )
 
-if decision:
+if (
+    decision is None
+    or market is None
+):
 
-    st.write(
-        f"""
-AlphaPilot evaluated **{decision['total']}**
-independent market conditions.
-
-**{decision['passed']}**
-conditions currently support the setup.
-
-Calculated confidence:
-**{decision['confidence']:.0f}%**
-
-Required confidence:
-**{MIN_CONFIDENCE}%**
-
-Final signal:
-**{decision['signal']}**
-"""
+    st.info(
+        "Run AI Analysis to generate explainable decision data."
     )
-
-    if market:
-
-        st.subheader(
-            "🔎 Decision Inputs",
-            anchor=False,
-        )
-
-        explain_col1, explain_col2 = st.columns(2)
-
-        with explain_col1:
-
-            st.write(
-                f"📍 SPY Price: **{money(market['price'])}**"
-            )
-
-            st.write(
-                f"📊 SMA20: **{money(market['sma20'])}**"
-            )
-
-            st.write(
-                f"📈 SMA50: **{money(market['sma50'])}**"
-            )
-
-            st.write(
-                f"💪 RSI: **{market['rsi']:.2f}**"
-            )
-
-        with explain_col2:
-
-            macd_text = (
-                "🟢 Bullish"
-                if market["bullish_macd"]
-                else "🔴 Bearish"
-            )
-
-            trend_text = (
-                "🟢 Bullish"
-                if market["bullish_trend"]
-                else "🔴 Non-Bullish"
-            )
-
-            volume_text = (
-                "🟢 Confirmed"
-                if market["volume_confirmation"]
-                else "🔴 Not Confirmed"
-            )
-
-            st.write(
-                f"📉 MACD: **{macd_text}**"
-            )
-
-            st.write(
-                f"📈 Trend: **{trend_text}**"
-            )
-
-            st.write(
-                f"🔊 Volume: **{volume_text}**"
-            )
 
 else:
 
-    st.info(
-        "📌 Run AI Analysis to generate explainable decision data."
-    )
+    x1, x2 = st.columns(2)
+
+    with x1:
+
+        st.markdown(
+            f"""
+            **Conditions evaluated:** {decision['total']}
+
+            **Conditions passed:** {decision['passed']}
+
+            **Technical confidence:** {decision['confidence']:.0f}%
+
+            **Required threshold:** {MIN_CONFIDENCE}%
+
+            **Final signal:** {decision['signal']}
+            """
+        )
+
+    with x2:
+
+        st.markdown(
+            f"""
+            **SPY:** {money(market['price'])}
+
+            **SMA20:** {money(market['sma20'])}
+
+            **SMA50:** {money(market['sma50'])}
+
+            **RSI:** {market['rsi']:.2f}
+
+            **MACD:** {
+                'Bullish'
+                if market['bullish_macd']
+                else
+                'Bearish'
+            }
+
+            **Volume:** {
+                'Confirmed'
+                if market['volume_confirmation']
+                else
+                'Not Confirmed'
+            }
+            """
+        )
 
 
 # ============================================================
 # SYSTEM STATUS
 # ============================================================
+
+st.markdown(
+    '<div id="status"></div>',
+    unsafe_allow_html=True,
+)
 
 st.divider()
 
@@ -3022,7 +4127,7 @@ st.header(
     anchor=False,
 )
 
-s1, s2, s3 = st.columns(3)
+s1, s2, s3, s4 = st.columns(4)
 
 with s1:
 
@@ -3035,7 +4140,7 @@ with s1:
     else:
 
         st.error(
-            "🔴 Alpaca unavailable"
+            "🔴 Alpaca API unavailable"
         )
 
 with s2:
@@ -3043,13 +4148,13 @@ with s2:
     if stock_client:
 
         st.success(
-            "🟢 SPY Market Data — IEX"
+            "🟢 SPY IEX Market Data"
         )
 
     else:
 
         st.error(
-            "🔴 Market data unavailable"
+            "🔴 IEX unavailable"
         )
 
 with s3:
@@ -3058,19 +4163,312 @@ with s3:
         "🔒 PAPER ONLY"
     )
 
+with s4:
+
+    if AUTO_REFRESH_AVAILABLE:
+
+        st.success(
+            "🔄 Auto Refresh Ready"
+        )
+
+    else:
+
+        st.warning(
+            "↻ Manual Refresh"
+        )
+
+
+# ============================================================
+# ACCOUNT OVERVIEW
+# ============================================================
+
+st.divider()
+
+st.header(
+    "📊 Trading Overview",
+    anchor=False,
+)
+
+a1, a2, a3, a4, a5 = st.columns(5)
+
+with a1:
+
+    st.metric(
+        "💰 Equity",
+        money(
+            equity
+        ),
+    )
+
+with a2:
+
+    if day_pnl is None:
+
+        st.metric(
+            "📅 Day P&L",
+            "N/A",
+        )
+
+    else:
+
+        st.metric(
+            "📅 Day P&L",
+            money(
+                day_pnl
+            ),
+        )
+
+with a3:
+
+    st.metric(
+        "💵 Cash",
+        money(
+            cash
+        ),
+    )
+
+with a4:
+
+    st.metric(
+        "⚡ Buying Power",
+        money(
+            buying_power
+        ),
+    )
+
+with a5:
+
+    st.metric(
+        "📂 Open Positions",
+        len(
+            positions
+        ),
+    )
+
+
+# ============================================================
+# TRADE TERMINAL
+# ============================================================
+
+st.divider()
+
+st.header(
+    "🧠 AI Thought Terminal",
+    anchor=False,
+)
+
+terminal_col1, terminal_col2, terminal_col3 = st.columns(
+    [1, 1, 1]
+)
+
+with terminal_col1:
+
+    terminal_filter = st.selectbox(
+        "Filter",
+        [
+            "All",
+            "Market",
+            "AI",
+            "Options",
+            "Risk",
+            "Execution",
+            "System",
+        ],
+    )
+
+with terminal_col2:
+
+    clear_terminal = st.button(
+        "🧹 Clear Terminal",
+        use_container_width=True,
+    )
+
+with terminal_col3:
+
+    st.caption(
+        "Terminal reflects current dashboard events."
+    )
+
+if clear_terminal:
+
+    st.session_state.terminal_cleared = True
+
+
+terminal_events = []
+
+
+if market:
+
+    terminal_events.append(
+        (
+            "Market",
+            "LIVE",
+            f"SPY market snapshot loaded at "
+            f"{market['timestamp'].strftime('%H:%M:%S')}",
+        )
+    )
+
+
+if decision:
+
+    terminal_events.append(
+        (
+            "AI",
+            decision["signal"],
+            f"Technical confidence "
+            f"{decision['confidence']:.0f}% "
+            f"from {decision['passed']}/"
+            f"{decision['total']} conditions",
+        )
+    )
+
+
+if option:
+
+    terminal_events.append(
+        (
+            "Options",
+            "SELECTED",
+            f"{option['symbol']} | "
+            f"score {option['score']:.2f}",
+        )
+    )
+
+
+if risk:
+
+    terminal_events.append(
+        (
+            "Risk",
+            (
+                "APPROVED"
+                if risk.get(
+                    "approved",
+                    False,
+                )
+                else
+                "REJECTED"
+            ),
+            risk.get(
+                "reason",
+                "",
+            ),
+        )
+    )
+
+
+if st.session_state.last_order:
+
+    terminal_events.append(
+        (
+            "Execution",
+            "ORDER",
+            str(
+                getattr(
+                    st.session_state.last_order,
+                    "id",
+                    "",
+                )
+            ),
+        )
+    )
+
+
+terminal_events.append(
+    (
+        "System",
+        "PAPER",
+        "Connected execution environment is Alpaca PAPER.",
+    )
+)
+
+
+if (
+    not st.session_state.terminal_cleared
+):
+
+    if terminal_filter != "All":
+
+        terminal_events = [
+            event
+            for event in terminal_events
+            if event[0]
+            == terminal_filter
+        ]
+
+    terminal_html = ""
+
+    for tag, level, message in terminal_events:
+
+        terminal_html += (
+            '<div class="terminal-line">'
+            f'[{fmt_timestamp()}] '
+            f'[{tag}] '
+            f'[{level}] '
+            f'{message}'
+            '</div>'
+        )
+
+    st.markdown(
+        f"""
+        <div class="terminal">
+            {terminal_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+else:
+
+    st.info(
+        "Terminal cleared for this view."
+    )
+
+    if st.button(
+        "↩ Restore Live Terminal"
+    ):
+
+        st.session_state.terminal_cleared = False
+
+        st.rerun()
+
+
+# ============================================================
+# AUTO REFRESH
+# ============================================================
+
+if AUTO_REFRESH_AVAILABLE:
+
+    st_autorefresh(
+        interval=(
+            st.session_state.settings[
+                "scan_interval"
+            ]
+            * 1000
+        ),
+        key="alphapilot_live_refresh",
+    )
+
 
 # ============================================================
 # FOOTER
 # ============================================================
 
-st.divider()
+st.markdown(
+    """
+<div class="footer">
 
-st.caption(
-    "🚀 AlphaPilot AI • "
-    "📊 Live market analysis • "
-    "🧠 Explainable AI • "
-    "⚙️ Options selection • "
-    "🛡️ Risk controls • "
-    "🏦 Alpaca paper execution • "
-    "🔒 No fabricated performance"
+    🚀 AlphaPilot AI
+    • Live Alpaca market data
+    • Explainable technical AI
+    • Options intelligence
+    • Risk governance
+    • Paper execution
+    • Position monitoring
+    • Realized performance tracking
+    • No fabricated results
+
+</div>
+""",
+    unsafe_allow_html=True,
 )
