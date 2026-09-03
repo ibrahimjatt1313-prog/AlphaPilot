@@ -581,32 +581,34 @@ def enum_text(value):
 
     return str(value).split(".")[-1].lower()
 
-def get_contract_expiry(symbol):
+@st.cache_data(ttl=300)
+def get_option_expiration(symbol):
+
+    if trading_client is None:
+        return "—"
 
     try:
+        contract = trading_client.get_option_contract(symbol)
 
-        # Example:
-        # SPY260904C00772000
-        #     260904 = YYMMDD
+        expiration = getattr(
+            contract,
+            "expiration_date",
+            None,
+        )
 
-        if len(symbol) >= 15:
+        if expiration is None:
+            return "—"
 
-            expiry_raw = symbol[-15:-9]
+        if isinstance(expiration, datetime):
+            return expiration.strftime("%Y-%m-%d")
 
-            expiry = datetime.strptime(
-                expiry_raw,
-                "%y%m%d",
-            )
+        if isinstance(expiration, date):
+            return expiration.strftime("%Y-%m-%d")
 
-            return expiry.strftime(
-                "%Y-%m-%d"
-            )
+        return str(expiration)
 
     except Exception:
-
-        pass
-
-    return "—"
+        return "—"
 
 def normalize_columns(df):
 
@@ -1392,11 +1394,6 @@ def scan_options(
             None,
         )
 
-        expires_at = getattr(
-            contract,
-            "expires_at",
-            None,
-       )
         if not symbol:
             continue
 
@@ -1494,9 +1491,6 @@ def scan_options(
 
                 "expiration":
                     expiration,
-
-                "expires_at": 
-                    expires_at,
 
                 "dte":
                     dte,
@@ -3120,7 +3114,7 @@ if (
     <b>Ticker:</b> SPY<br>
     <b>Contract:</b> {option['symbol']}<br>
     <b>Strike:</b> {money(option['strike'])}<br>
-   <b>Expires At:</b> {option.get('expires_at', '—')}<br>
+    <b>Option Expiration:</b> {option.get('expiration', '—')}<br>
     <b>Option Type:</b> CALL<br>
     <b>Signal Confidence:</b>
         {decision['confidence']:.0f}%<br>
@@ -3196,11 +3190,11 @@ else:
 
     with o3:
 
-       st.metric(
-           "Expires At",
-           str(
-              option.get("expires_at", "—")
-           ),
+        st.metric(
+            "Option Expiration",
+            str(
+              option.get("expiration", "—")
+            ),
         )
 
     with o4:
@@ -3693,37 +3687,71 @@ else:
     )
 
     for order in sorted_orders[:10]:
+        symbol = getattr(order, "symbol", "")
+
+        option_expiration = get_option_expiration(symbol)
+
+        order_expires_at = getattr(
+            order,
+            "expires_at",
+            None,
+        )
+
         recent_order_rows.append(
             {
-                "Asset": getattr(order, "symbol", "—"),
+                "Asset": symbol or "—",
+
                 "Order Type": enum_text(
                     getattr(order, "order_type", "")
                 ),
+
                 "Side": enum_text(
                     getattr(order, "side", "")
                 ),
+
                 "Qty": order_number(
                     getattr(order, "qty", 0)
                 ),
+
                 "Filled Qty": order_number(
                     getattr(order, "filled_qty", 0)
                 ),
+
                 "Avg. Fill Price": (
-                    money(getattr(order, "filled_avg_price", 0))
-                    if getattr(order, "filled_avg_price", None) is not None
+                    money(
+                        getattr(
+                            order,
+                            "filled_avg_price",
+                            0,
+                        )
+                    )
+                    if getattr(
+                        order,
+                        "filled_avg_price",
+                        None,
+                    ) is not None
                     else "—"
                 ),
+
                 "Status": enum_text(
                     getattr(order, "status", "")
                 ),
+
+                "Option Expiration": option_expiration,
+
                 "Submitted At": order_timestamp(
-                    order, "submitted_at"
+                    order,
+                    "submitted_at",
                 ),
+
                 "Filled At": order_timestamp(
-                    order, "filled_at"
+                    order,
+                    "filled_at",
                 ),
-              "Expires At": get_contract_expiry(
-                    getattr(order, "symbol", "")
+
+                "Order Expires At": order_timestamp(
+                    order,
+                    "expires_at",
                 ),
             }
         )
