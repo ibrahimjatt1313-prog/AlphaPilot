@@ -2931,7 +2931,7 @@ if decision is not None:
         "<br>",
         unsafe_allow_html=True,
     )
-
+   
     d1, d2 = st.columns(
         [1.4, 1]
     )
@@ -2943,44 +2943,17 @@ if decision is not None:
             == "BUY"
         ):
 
-            st.markdown(
-                f"""
-                <div class="signal-buy">
-
-                    <div class="signal-title">
-                        🟢 BUY SIGNAL
-                    </div>
-
-                    <div class="small-muted">
-                        Technical conditions meet
-                        the configured confidence threshold.
-                    </div>
-
-                </div>
-                """,
-                unsafe_allow_html=True,
+            st.success(
+                "🟢 BUY SIGNAL\n\n"
+                "Technical conditions meet the configured confidence threshold."
             )
 
         else:
 
-            st.markdown(
-                f"""
-                <div class="signal-no-trade">
-
-                    <div class="signal-title">
-                        🔴 NO TRADE
-                    </div>
-
-                    <div class="small-muted">
-                        Current conditions do not meet
-                        the minimum confidence requirement.
-                    </div>
-
-                </div>
-                """,
-                unsafe_allow_html=True,
+            st.error(
+                "🔴 NO TRADE\n\n"
+                "Current conditions do not meet the minimum confidence requirement."
             )
-
     with d2:
 
         st.metric(
@@ -2992,9 +2965,7 @@ if decision is not None:
             ),
         )
 
-    st.markdown(
-        "### 🔍 Signal Evidence"
-    )
+    st.subheader("🔍 Signal Evidence")
 
     e1, e2 = st.columns(2)
 
@@ -3069,7 +3040,6 @@ if decision is not None:
             st.warning(
                 "⚠️ Volume Not Confirmed"
             )
-
 
 # ============================================================
 # COPILOT RECOMMENDATION
@@ -3311,41 +3281,15 @@ if risk is None:
 
 else:
 
-    if risk.get(
-        "approved",
-        False,
-    ):
-
-        st.markdown(
-            """
-            <div class="success-box">
-
-                <b>🟢 FINAL RISK DECISION: APPROVED</b>
-
-                <br>
-
-                All configured guards passed.
-
-            </div>
-            """,
-            unsafe_allow_html=True,
+    if risk.get("approved", False):
+        st.success(
+            "🟢 FINAL RISK DECISION: APPROVED\n\n"
+            "All configured risk guards passed."
         )
-
     else:
-
-        st.markdown(
-            """
-            <div class="lock-box">
-
-                <b>🔴 FINAL RISK DECISION: REJECTED</b>
-
-                <br>
-
-                One or more guards failed.
-
-            </div>
-            """,
-            unsafe_allow_html=True,
+        st.error(
+            "🔴 FINAL RISK DECISION: REJECTED\n\n"
+            "One or more guards failed."
         )
 
     r1, r2, r3, r4 = st.columns(4)
@@ -3503,23 +3447,10 @@ order_ready = (
 
 if not order_ready:
 
-    st.markdown(
-        """
-        <div class="lock-box">
-
-            🔒 <b>ORDER LOCKED</b>
-
-            <br><br>
-
-            Required:
-
-            BUY signal →
-            selected option →
-            approved risk check
-
-        </div>
-        """,
-        unsafe_allow_html=True,
+    st.warning(
+        "🔒 ORDER LOCKED\n\n"
+        "Required:\n"
+        "BUY signal → selected option → approved risk check"
     )
 
 else:
