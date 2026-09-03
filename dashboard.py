@@ -3616,6 +3616,96 @@ if (
 
 
 # ============================================================
+# RECENT ALPACA PAPER ORDERS
+# ============================================================
+
+st.markdown(
+    '<div id="orders"></div>',
+    unsafe_allow_html=True,
+)
+
+st.divider()
+st.header(
+    "📋 Recent Alpaca Paper Orders",
+    anchor=False,
+)
+
+if not orders:
+    st.info(
+        "No Alpaca PAPER orders found."
+    )
+else:
+    recent_order_rows = []
+
+    def order_timestamp(order, field):
+        value = getattr(order, field, None)
+        if value is None:
+            return "—"
+        try:
+            return value.strftime("%Y-%m-%d %H:%M:%S %Z")
+        except Exception:
+            return str(value)
+
+    def order_number(value, decimals=2):
+        try:
+            return f"{float(value):.{decimals}f}"
+        except Exception:
+            return "—"
+
+    sorted_orders = sorted(
+        orders,
+        key=lambda order: getattr(order, "submitted_at", None) or datetime.min,
+        reverse=True,
+    )
+
+    for order in sorted_orders[:10]:
+        recent_order_rows.append(
+            {
+                "Asset": getattr(order, "symbol", "—"),
+                "Order Type": enum_text(
+                    getattr(order, "order_type", "")
+                ),
+                "Side": enum_text(
+                    getattr(order, "side", "")
+                ),
+                "Qty": order_number(
+                    getattr(order, "qty", 0)
+                ),
+                "Filled Qty": order_number(
+                    getattr(order, "filled_qty", 0)
+                ),
+                "Avg. Fill Price": (
+                    money(getattr(order, "filled_avg_price", 0))
+                    if getattr(order, "filled_avg_price", None) is not None
+                    else "—"
+                ),
+                "Status": enum_text(
+                    getattr(order, "status", "")
+                ),
+                "Submitted At": order_timestamp(
+                    order, "submitted_at"
+                ),
+                "Filled At": order_timestamp(
+                    order, "filled_at"
+                ),
+                "Expires At": order_timestamp(
+                    order, "expired_at"
+                ),
+            }
+        )
+
+    st.dataframe(
+        pd.DataFrame(recent_order_rows),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.caption(
+        "Source: Alpaca PAPER account API. Showing the 10 most recent orders; no static or fabricated order data is used."
+    )
+
+
+# ============================================================
 # POSITION MANAGER
 # ============================================================
 
