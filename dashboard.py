@@ -20,6 +20,8 @@ import os
 import math
 from pathlib import Path
 from datetime import datetime, timedelta, date, timezone
+from alpaca.trading.requests import GetOrdersRequest
+from alpaca.trading.enums import QueryOrderStatus
 
 import pandas as pd
 import streamlit as st
@@ -747,22 +749,20 @@ def get_positions():
 # ============================================================
 
 def get_orders():
-
     if trading_client is None:
         return []
 
     try:
+        request = GetOrdersRequest(
+            status=QueryOrderStatus.ALL,
+            limit=100,
+            nested=True,
+        )
 
-        if QueryOrderStatus:
+        return trading_client.get_orders(filter=request)
 
-            return trading_client.get_orders(
-                filter=QueryOrderStatus.ALL
-            )
-
-        return trading_client.get_orders()
-
-    except Exception:
-
+    except Exception as exc:
+        st.error(f"❌ Alpaca orders API error: {exc}")
         return []
 
 
