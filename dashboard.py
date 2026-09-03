@@ -581,6 +581,32 @@ def enum_text(value):
 
     return str(value).split(".")[-1].lower()
 
+def get_contract_expiry(symbol):
+
+    try:
+
+        # Example:
+        # SPY260904C00772000
+        #     260904 = YYMMDD
+
+        if len(symbol) >= 15:
+
+            expiry_raw = symbol[-15:-9]
+
+            expiry = datetime.strptime(
+                expiry_raw,
+                "%y%m%d",
+            )
+
+            return expiry.strftime(
+                "%Y-%m-%d"
+            )
+
+    except Exception:
+
+        pass
+
+    return "—"
 
 def normalize_columns(df):
 
@@ -1366,6 +1392,11 @@ def scan_options(
             None,
         )
 
+        expires_at = getattr(
+            contract,
+            "expires_at",
+            None,
+       )
         if not symbol:
             continue
 
@@ -1463,6 +1494,9 @@ def scan_options(
 
                 "expiration":
                     expiration,
+
+                "expires_at": 
+                    expires_at,
 
                 "dte":
                     dte,
@@ -3086,7 +3120,7 @@ if (
     <b>Ticker:</b> SPY<br>
     <b>Contract:</b> {option['symbol']}<br>
     <b>Strike:</b> {money(option['strike'])}<br>
-    <b>Expiry:</b> {option['expiration']}<br>
+   <b>Expires At:</b> {option.get('expires_at', '—')}<br>
     <b>Option Type:</b> CALL<br>
     <b>Signal Confidence:</b>
         {decision['confidence']:.0f}%<br>
@@ -3162,11 +3196,11 @@ else:
 
     with o3:
 
-        st.metric(
-            "Expiry",
-            str(
-                option["expiration"]
-            ),
+       st.metric(
+           "Expires At",
+           str(
+              option.get("expires_at", "—")
+           ),
         )
 
     with o4:
@@ -3688,8 +3722,8 @@ else:
                 "Filled At": order_timestamp(
                     order, "filled_at"
                 ),
-                "Expires At": order_timestamp(
-                    order, "expired_at"
+              "Expires At": get_contract_expiry(
+                    getattr(order, "symbol", "")
                 ),
             }
         )
