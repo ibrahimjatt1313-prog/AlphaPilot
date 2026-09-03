@@ -2796,44 +2796,41 @@ if scan_contracts:
 
 
 # ============================================================
-# RISK
+# RISK ENGINE TRIGGER & IMPLEMENTATION
 # ============================================================
 
 if run_risk:
-
     try:
+        # Step 1: Ensure Market Data is available
+        if st.session_state.get("market_data") is None:
+            st.session_state.market_data = fetch_market_data()
 
-        if (
-            st.session_state.market_data
-            is None
-        ):
-
-            st.session_state.market_data = (
-                fetch_market_data()
-            )
-
-        if (
-            st.session_state.ai_decision
-            is None
-        ):
-
-            st.session_state.ai_decision = (
-                calculate_ai_decision(
+        # Step 2: Ensure AI Decision is calculated
+        if st.session_state.get("ai_decision") is None:
+            if st.session_state.market_data is not None:
+                st.session_state.ai_decision = calculate_ai_decision(
                     st.session_state.market_data
                 )
-            )
+            else:
+                st.warning("⚠️ Market data unavailable to calculate AI decision.")
 
-        st.session_state.risk_result = (
-            run_risk_check()
-        )
+        # Step 3: Ensure an Option is selected for Risk Calculation
+        if st.session_state.get("selected_option") is None:
+            best_opt, candidates = scan_options(st.session_state.market_data)
+            st.session_state.selected_option = best_opt
+            st.session_state.option_candidates = candidates
+
+        # Step 4: Run Risk Engine Check
+        st.session_state.risk_result = run_risk_check()
+        
+        if st.session_state.risk_result and st.session_state.risk_result.get("approved"):
+            st.success("✅ Risk Check Passed: Order parameters within risk thresholds.")
+        else:
+            reason = st.session_state.risk_result.get("reason", "Unknown") if st.session_state.risk_result else "No result"
+            st.error(f"❌ Risk Check Failed: {reason}")
 
     except Exception as exc:
-
-        st.error(
-            f"❌ Risk engine error: {exc}"
-        )
-
-
+        st.error(f"❌ Risk engine error: {exc}")
 # ============================================================
 # DECISION CENTER
 # ============================================================
