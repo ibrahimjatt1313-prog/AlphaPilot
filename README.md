@@ -98,3 +98,9 @@ Position Monitor
 &#x20;   ↓
 
 Trade History / Performance
+
+## 🔌 Alpaca Tooling & MCP / CLI Integration
+
+AlphaPilot AI is natively structured to align with Alpaca's modern autonomous agent ecosystem:
+- **Alpaca Trading API (`alpaca-py`)**: Serves as the primary execution engine for live market data ingestion, account state verification, and option order routing.
+- **MCP & CLI Agent Schema**: Formatted to support execution via Alpaca's Model Context Protocol (MCP) server schema and CLI tooling for automated paper trading governance.

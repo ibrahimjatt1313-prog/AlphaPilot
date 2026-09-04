@@ -1,4 +1,5 @@
 alpaca-py
+mcp
 python-dotenv
 pandas
 streamlit
