@@ -4313,7 +4313,7 @@ st.markdown(
 st.divider()
 
 st.header(
-    "âš¡ System Status",
+    "System Status",
     anchor=False,
 )
 
@@ -4443,7 +4443,7 @@ with a3:
 with a4:
 
     st.metric(
-        "âš¡ Buying Power",
+        "Buying Power",
         money(
             buying_power
         ),
