@@ -2870,7 +2870,7 @@ if scan_contracts:
             st.session_state.risk_result = None
 
             st.warning(
-                " Options scan blocked — "
+                "ðŸŸ¡ Options scan blocked — "
                 "current AI signal is NO TRADE."
             )
 

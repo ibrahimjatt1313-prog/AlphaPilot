@@ -1,0 +1,2 @@
+trade_id,symbol,quantity,entry_price,exit_price,pnl,pnl_percent,entry_time,exit_time,reason
+20260901183521,SPY260904C00770000,1.0,4.84,1.01,-383.0,-79.13,,2026-09-01 18:35:21,STOP LOSS

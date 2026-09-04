@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 
 # ============================================================
 # AlphaPilot AI
@@ -110,7 +110,7 @@ except Exception as exc:
 
 st.set_page_config(
     page_title="AlphaPilot AI",
-    page_icon="🚀",
+    page_icon="ðŸš€",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -585,7 +585,7 @@ def enum_text(value):
 def get_option_expiration(symbol):
 
     if trading_client is None:
-        return "—"
+        return "â€”"
 
     try:
         contract = trading_client.get_option_contract(symbol)
@@ -597,7 +597,7 @@ def get_option_expiration(symbol):
         )
 
         if expiration is None:
-            return "—"
+            return "â€”"
 
         if isinstance(expiration, datetime):
             return expiration.strftime("%Y-%m-%d")
@@ -608,7 +608,7 @@ def get_option_expiration(symbol):
         return str(expiration)
 
     except Exception:
-        return "—"
+        return "â€”"
 
 def normalize_columns(df):
 
@@ -790,7 +790,7 @@ def get_orders():
         return trading_client.get_orders(filter=request)
 
     except Exception as exc:
-        st.error(f"❌ Alpaca orders API error: {exc}")
+        st.error(f"âŒ Alpaca orders API error: {exc}")
         return []
 
 
@@ -1125,43 +1125,29 @@ def fetch_market_data():
 def calculate_ai_decision(
     market
 ):
-    # ========================================================
-    # SMART WEIGHTED TECHNICAL DECISION ENGINE
-    # ========================================================
 
-    price = float(market.get("price", 0) or 0)
-    sma20 = float(market.get("sma20", 0) or 0)
-    sma50 = float(market.get("sma50", 0) or 0)
-    rsi = float(market.get("rsi", 50) or 50)
-    macd = float(market.get("macd", 0) or 0)
-    macd_signal = float(market.get("macd_signal", 0) or 0)
-    volume = float(market.get("volume", 0) or 0)
-    volume_average = float(market.get("volume_average", 0) or 0)
-
-    # --------------------------------------------------------
-    # BULLISH CONDITIONS
-    # --------------------------------------------------------
-
-    bullish_checks = {
+    checks = {
         "Price > SMA20":
-            price > sma20,
+            market["price"] > market["sma20"],
 
         "SMA20 > SMA50":
-            sma20 > sma50,
+            market["sma20"] > market["sma50"],
 
         "RSI supportive":
-            50 <= rsi <= 68,
+            50 <= market["rsi"] <= 70,
 
         "MACD bullish":
-            macd > macd_signal,
+            market["macd"] > market["macd_signal"],
 
         "Volume confirmation":
-            volume >= volume_average
-            if volume_average > 0
+            (
+                market["volume"] >= market["volume_average"]
+            )
+            if market["volume_average"] > 0
             else False,
     }
 
-    bullish_weights = {
+    weights = {
         "Price > SMA20": 25,
         "SMA20 > SMA50": 25,
         "RSI supportive": 15,
@@ -1169,115 +1155,24 @@ def calculate_ai_decision(
         "Volume confirmation": 15,
     }
 
-    bullish_confidence = sum(
-        bullish_weights[name]
-        for name, passed_check in bullish_checks.items()
+    confidence = sum(
+        weights[name]
+        for name, passed_check in checks.items()
         if passed_check
     )
 
-    # --------------------------------------------------------
-    # BEARISH CONDITIONS
-    # --------------------------------------------------------
-
-    bearish_checks = {
-        "Price < SMA20":
-            price < sma20,
-
-        "SMA20 < SMA50":
-            sma20 < sma50,
-
-        "RSI weak":
-            30 <= rsi <= 50,
-
-        "MACD bearish":
-            macd < macd_signal,
-
-        "Volume confirmation":
-            volume >= volume_average
-            if volume_average > 0
-            else False,
-    }
-
-    bearish_weights = {
-        "Price < SMA20": 25,
-        "SMA20 < SMA50": 25,
-        "RSI weak": 15,
-        "MACD bearish": 20,
-        "Volume confirmation": 15,
-    }
-
-    bearish_confidence = sum(
-        bearish_weights[name]
-        for name, passed_check in bearish_checks.items()
-        if passed_check
-    )
-
-    bullish_passed = sum(
+    passed = sum(
         bool(value)
-        for value in bullish_checks.values()
+        for value in checks.values()
     )
-
-    bearish_passed = sum(
-        bool(value)
-        for value in bearish_checks.values()
-    )
-
-    # --------------------------------------------------------
-    # SMART SIGNAL SELECTION
-    # --------------------------------------------------------
-
-    signal = "NO TRADE"
-    confidence = max(
-        bullish_confidence,
-        bearish_confidence,
-    )
-
-    checks = bullish_checks
-    passed = bullish_passed
-
-    # BUY requires:
-    # - minimum configured confidence
-    # - bullish trend structure
-    # - at least 3 bullish conditions
-    #
-    # SELL is informational for now because the current
-    # execution engine is Long Call / BUY only.
-
-    if (
-        bullish_confidence >= MIN_CONFIDENCE
-        and bullish_passed >= 3
-        and price > sma20
-        and sma20 > sma50
-    ):
-        signal = "BUY"
-        confidence = bullish_confidence
-        checks = bullish_checks
-        passed = bullish_passed
-
-    elif (
-        bearish_confidence >= MIN_CONFIDENCE
-        and bearish_passed >= 3
-        and price < sma20
-        and sma20 < sma50
-    ):
-        signal = "SELL"
-        confidence = bearish_confidence
-        checks = bearish_checks
-        passed = bearish_passed
-
-    else:
-        signal = "NO TRADE"
-
-        if bullish_confidence >= bearish_confidence:
-            confidence = bullish_confidence
-            checks = bullish_checks
-            passed = bullish_passed
-        else:
-            confidence = bearish_confidence
-            checks = bearish_checks
-            passed = bearish_passed
 
     total = len(checks)
+
+    signal = (
+        "BUY"
+        if confidence >= MIN_CONFIDENCE
+        else "NO TRADE"
+    )
 
     return {
         "signal": signal,
@@ -1285,13 +1180,7 @@ def calculate_ai_decision(
         "checks": checks,
         "passed": passed,
         "total": total,
-        "bullish_confidence": float(bullish_confidence),
-        "bearish_confidence": float(bearish_confidence),
-        "bullish_passed": bullish_passed,
-        "bearish_passed": bearish_passed,
     }
-
-
 def get_option_price(
     symbol
 ):
@@ -1301,25 +1190,18 @@ def get_option_price(
 
     try:
 
-        request = (
-            OptionLatestQuoteRequest(
-                symbol_or_symbols=symbol
-            )
+        request = OptionLatestQuoteRequest(
+            symbol_or_symbols=symbol
         )
 
-        response = (
-            option_client
-            .get_option_latest_quote(
-                request
-            )
+        response = option_client.get_option_latest_quote(
+            request
         )
 
         try:
-
             quote = response[symbol]
 
         except Exception:
-
             quote = response.get(
                 symbol
             )
@@ -1344,7 +1226,6 @@ def get_option_price(
         )
 
         if bid > 0 and ask > 0:
-
             return (
                 bid + ask
             ) / 2
@@ -1356,7 +1237,6 @@ def get_option_price(
             return bid
 
     except Exception:
-
         pass
 
     return 0.0
@@ -1862,18 +1742,7 @@ def run_risk_check():
         )
     )
 
-    # Risk-sized quantity: never exceed either account-risk or exposure limit.
-    # Also respect the configured default contract quantity as a ceiling.
-    quantity = min(
-        DEFAULT_CONTRACT_QTY,
-        max_quantity,
-    )
-
-    estimated_cost = (
-        option_price
-        * 100
-        * quantity
-    )
+    quantity = DEFAULT_CONTRACT_QTY
 
     estimated_cost = (
         option_price
@@ -2359,7 +2228,7 @@ day_pnl = get_day_pnl(
 with st.sidebar:
 
     st.markdown(
-        "## 🚀 AlphaPilot AI"
+        "## ðŸš€ AlphaPilot AI"
     )
 
     st.caption(
@@ -2371,31 +2240,31 @@ with st.sidebar:
     if trading_client:
 
         st.success(
-            "🟢 Alpaca PAPER connected"
+            "ðŸŸ¢ Alpaca PAPER connected"
         )
 
     else:
 
         st.error(
-            "🔴 Alpaca unavailable"
+            "ðŸ”´ Alpaca unavailable"
         )
 
     st.divider()
 
     st.markdown(
-        "### 🎛️ Operating Mode"
+        "### ðŸŽ›ï¸ Operating Mode"
     )
 
     st.session_state.copilot_mode = (
         st.toggle(
-            "🧠 Copilot Mode",
+            "ðŸ§  Copilot Mode",
             value=st.session_state.copilot_mode,
         )
     )
 
     st.session_state.autopilot_mode = (
         st.toggle(
-            "🤖 Autopilot",
+            "ðŸ¤– Autopilot",
             value=st.session_state.autopilot_mode,
         )
     )
@@ -2411,7 +2280,7 @@ with st.sidebar:
     st.divider()
 
     st.markdown(
-        "### 📌 Quick Navigation"
+        "### ðŸ“Œ Quick Navigation"
     )
 
     st.markdown(
@@ -2429,7 +2298,7 @@ with st.sidebar:
     st.divider()
 
     st.markdown(
-        "### 🔒 Execution Policy"
+        "### ðŸ”’ Execution Policy"
     )
 
     st.caption(
@@ -2476,7 +2345,7 @@ st.markdown(
 # ============================================================
 
 st.warning(
-    "⚠️ PAPER TRADING ONLY — "
+    "âš ï¸ PAPER TRADING ONLY â€” "
     "Any order submitted from this dashboard "
     "can reach the connected Alpaca PAPER account."
 )
@@ -2489,19 +2358,19 @@ st.warning(
 st.markdown(
     """
     <div class="pipeline">
-        <span>📊 Market</span>
-        <span class="arrow">→</span>
-        <span>🧠 AI Signal</span>
-        <span class="arrow">→</span>
-        <span>⚙️ Options</span>
-        <span class="arrow">→</span>
-        <span>🛡️ Risk</span>
-        <span class="arrow">→</span>
-        <span>🚀 Paper Order</span>
-        <span class="arrow">→</span>
-        <span>👁️ Monitor</span>
-        <span class="arrow">→</span>
-        <span>🎯 Exit</span>
+        <span>ðŸ“Š Market</span>
+        <span class="arrow">â†’</span>
+        <span>ðŸ§  AI Signal</span>
+        <span class="arrow">â†’</span>
+        <span>âš™ï¸ Options</span>
+        <span class="arrow">â†’</span>
+        <span>ðŸ›¡ï¸ Risk</span>
+        <span class="arrow">â†’</span>
+        <span>ðŸš€ Paper Order</span>
+        <span class="arrow">â†’</span>
+        <span>ðŸ‘ï¸ Monitor</span>
+        <span class="arrow">â†’</span>
+        <span>ðŸŽ¯ Exit</span>
     </div>
     """,
     unsafe_allow_html=True,
@@ -2512,7 +2381,7 @@ st.markdown(
 # ============================================================
 
 with st.expander(
-    "⚙️ Setup & Trading Workflow",
+    "âš™ï¸ Setup & Trading Workflow",
     expanded=False,
 ):
 
@@ -2645,7 +2514,7 @@ with st.expander(
             )
 
         apply_settings = st.form_submit_button(
-            "✓ APPLY PARAMETERS",
+            "âœ“ APPLY PARAMETERS",
             use_container_width=True,
         )
 
@@ -2691,7 +2560,7 @@ with st.expander(
     if settings["strategy"] != "Long Call":
 
         st.warning(
-            "⚠️ Multi-leg strategies are configuration-only "
+            "âš ï¸ Multi-leg strategies are configuration-only "
             "in this dashboard. Paper execution currently "
             "supports the implemented Long Call workflow."
         )
@@ -2702,7 +2571,7 @@ with st.expander(
 # ============================================================
 
 st.header(
-    "🎮 Live Trading Controls",
+    "ðŸŽ® Live Trading Controls",
     anchor=False,
 )
 
@@ -2711,35 +2580,35 @@ b1, b2, b3, b4, b5 = st.columns(5)
 with b1:
 
     refresh_market = st.button(
-        "🔄 Refresh Market",
+        "ðŸ”„ Refresh Market",
         use_container_width=True,
     )
 
 with b2:
 
     run_ai = st.button(
-        "🧠 Run AI Analysis",
+        "ðŸ§  Run AI Analysis",
         use_container_width=True,
     )
 
 with b3:
 
     scan_contracts = st.button(
-        "⚙️ Scan Options",
+        "âš™ï¸ Scan Options",
         use_container_width=True,
     )
 
 with b4:
 
     run_risk = st.button(
-        "🛡️ Run Risk Check",
+        "ðŸ›¡ï¸ Run Risk Check",
         use_container_width=True,
     )
 
 with b5:
 
     monitor_button = st.button(
-        "👁️ Refresh Positions",
+        "ðŸ‘ï¸ Refresh Positions",
         use_container_width=True,
     )
 
@@ -2775,7 +2644,7 @@ if refresh_market:
         st.session_state.risk_result = None
 
         st.success(
-            "🟢 Fresh SPY market data loaded."
+            "ðŸŸ¢ Fresh SPY market data loaded."
         )
 
     except Exception as exc:
@@ -2785,7 +2654,7 @@ if refresh_market:
         )
 
         st.error(
-            f"❌ Market data error: {exc}"
+            f"âŒ Market data error: {exc}"
         )
 
 
@@ -2819,13 +2688,13 @@ if run_ai:
         st.session_state.risk_result = None
 
         st.success(
-            "🧠 AI decision generated from fresh market data."
+            "ðŸ§  AI decision generated from fresh market data."
         )
 
     except Exception as exc:
 
         st.error(
-            f"❌ AI analysis failed: {exc}"
+            f"âŒ AI analysis failed: {exc}"
         )
 
 
@@ -2870,7 +2739,7 @@ if scan_contracts:
             st.session_state.risk_result = None
 
             st.warning(
-                " Options scan blocked — "
+                "ðŸŸ¡ Options scan blocked â€” "
                 "current AI signal is NO TRADE."
             )
 
@@ -2893,13 +2762,13 @@ if scan_contracts:
             st.session_state.risk_result = None
 
             st.success(
-                "🟢 Live option selection completed."
+                "ðŸŸ¢ Live option selection completed."
             )
 
     except Exception as exc:
 
         st.error(
-            f"❌ Option scanner error: {exc}"
+            f"âŒ Option scanner error: {exc}"
         )
 
 
@@ -2920,15 +2789,10 @@ if run_risk:
                     st.session_state.market_data
                 )
             else:
-                st.warning("⚠️ Market data unavailable to calculate AI decision.")
+                st.warning("âš ï¸ Market data unavailable to calculate AI decision.")
 
-        # Step 3: Option selection is allowed only after a BUY signal.
-        if st.session_state.ai_decision.get("signal") != "BUY":
-            st.session_state.selected_option = None
-            st.session_state.option_candidates = []
-            st.session_state.risk_result = None
-            st.error("Risk Check blocked: AI signal is NO TRADE.")
-        elif st.session_state.get("selected_option") is None:
+        # Step 3: Ensure an Option is selected for Risk Calculation
+        if st.session_state.get("selected_option") is None:
             best_opt, candidates = scan_options(st.session_state.market_data)
             st.session_state.selected_option = best_opt
             st.session_state.option_candidates = candidates
@@ -2937,13 +2801,13 @@ if run_risk:
         st.session_state.risk_result = run_risk_check()
         
         if st.session_state.risk_result and st.session_state.risk_result.get("approved"):
-            st.success("✅ Risk Check Passed: Order parameters within risk thresholds.")
+            st.success("âœ… Risk Check Passed: Order parameters within risk thresholds.")
         else:
             reason = st.session_state.risk_result.get("reason", "Unknown") if st.session_state.risk_result else "No result"
-            st.error(f"❌ Risk Check Failed: {reason}")
+            st.error(f"âŒ Risk Check Failed: {reason}")
 
     except Exception as exc:
-        st.error(f"❌ Risk engine error: {exc}")
+        st.error(f"âŒ Risk engine error: {exc}")
 # ============================================================
 # DECISION CENTER
 # ============================================================
@@ -2956,7 +2820,7 @@ st.markdown(
 st.divider()
 
 st.header(
-    "🧠 Decision Center",
+    "ðŸ§  Decision Center",
     anchor=False,
 )
 
@@ -3027,10 +2891,10 @@ else:
         st.metric(
             "MACD",
             (
-                "🟢 Bullish"
+                "ðŸŸ¢ Bullish"
                 if market["bullish_macd"]
                 else
-                "🔴 Bearish"
+                "ðŸ”´ Bearish"
             ),
         )
 
@@ -3054,14 +2918,14 @@ if decision is not None:
         ):
 
             st.success(
-                "🟢 BUY SIGNAL\n\n"
+                "ðŸŸ¢ BUY SIGNAL\n\n"
                 "Technical conditions meet the configured confidence threshold."
             )
 
         else:
 
             st.error(
-                "🔴 NO TRADE\n\n"
+                "ðŸ”´ NO TRADE\n\n"
                 "Current conditions do not meet the minimum confidence requirement."
             )
     with d2:
@@ -3075,7 +2939,7 @@ if decision is not None:
             ),
         )
 
-    st.subheader("🔍 Signal Evidence")
+    st.subheader("ðŸ” Signal Evidence")
 
     e1, e2 = st.columns(2)
 
@@ -3090,13 +2954,13 @@ if decision is not None:
             if passed:
 
                 st.success(
-                    f"PASS — {label}"
+                    f"PASS â€” {label}"
                 )
 
             else:
 
                 st.error(
-                    f"FAIL — {label}"
+                    f"FAIL â€” {label}"
                 )
 
     with e2:
@@ -3106,13 +2970,13 @@ if decision is not None:
             if passed:
 
                 st.success(
-                    f"PASS — {label}"
+                    f"PASS â€” {label}"
                 )
 
             else:
 
                 st.error(
-                    f"FAIL — {label}"
+                    f"FAIL â€” {label}"
                 )
 
     st.caption(
@@ -3128,13 +2992,13 @@ if decision is not None:
         if market["bullish_trend"]:
 
             st.success(
-                "🟢 Bullish Trend"
+                "ðŸŸ¢ Bullish Trend"
             )
 
         else:
 
             st.error(
-                "🔴 Non-Bullish Trend"
+                "ðŸ”´ Non-Bullish Trend"
             )
 
     with volume_col:
@@ -3142,13 +3006,13 @@ if decision is not None:
         if market["volume_confirmation"]:
 
             st.success(
-                "🔊 Volume Confirmed"
+                "ðŸ”Š Volume Confirmed"
             )
 
         else:
 
             st.warning(
-                "⚠️ Volume Not Confirmed"
+                "âš ï¸ Volume Not Confirmed"
             )
 
 # ============================================================
@@ -3156,7 +3020,7 @@ if decision is not None:
 # ============================================================
 
 st.subheader(
-    "🤖 Copilot Trade Recommendation"
+    "ðŸ¤– Copilot Trade Recommendation"
 )
 
 option = (
@@ -3186,7 +3050,7 @@ if (
 <div class="recommendation">
 
     <div class="recommendation-title">
-        🎯 Proposed Paper Trade
+        ðŸŽ¯ Proposed Paper Trade
     </div>
 
     <br>
@@ -3194,7 +3058,7 @@ if (
     <b>Ticker:</b> SPY<br>
     <b>Contract:</b> {option['symbol']}<br>
     <b>Strike:</b> {money(option['strike'])}<br>
-    <b>Option Expiration:</b> {option.get('expiration', '—')}<br>
+    <b>Option Expiration:</b> {option.get('expiration', 'â€”')}<br>
     <b>Option Type:</b> CALL<br>
     <b>Signal Confidence:</b>
         {decision['confidence']:.0f}%<br>
@@ -3236,7 +3100,7 @@ st.markdown(
 st.divider()
 
 st.header(
-    "⚙️ Option Selection",
+    "âš™ï¸ Option Selection",
     anchor=False,
 )
 
@@ -3273,7 +3137,7 @@ else:
         st.metric(
             "Option Expiration",
             str(
-              option.get("expiration", "—")
+              option.get("expiration", "â€”")
             ),
         )
 
@@ -3331,7 +3195,7 @@ if (
 ):
 
     with st.expander(
-        "📋 Active Option Candidates"
+        "ðŸ“‹ Active Option Candidates"
     ):
 
         candidate_df = pd.DataFrame(
@@ -3374,7 +3238,7 @@ st.markdown(
 st.divider()
 
 st.header(
-    "🛡️ Risk Guards",
+    "ðŸ›¡ï¸ Risk Guards",
     anchor=False,
 )
 
@@ -3393,12 +3257,12 @@ else:
 
     if risk.get("approved", False):
         st.success(
-            "🟢 FINAL RISK DECISION: APPROVED\n\n"
+            "ðŸŸ¢ FINAL RISK DECISION: APPROVED\n\n"
             "All configured risk guards passed."
         )
     else:
         st.error(
-            "🔴 FINAL RISK DECISION: REJECTED\n\n"
+            "ðŸ”´ FINAL RISK DECISION: REJECTED\n\n"
             "One or more guards failed."
         )
 
@@ -3527,12 +3391,12 @@ else:
 st.divider()
 
 st.header(
-    "🚀 Alpaca Paper Execution",
+    "ðŸš€ Alpaca Paper Execution",
     anchor=False,
 )
 
 st.error(
-    "⚠️ REAL PAPER ORDER CONTROL — "
+    "âš ï¸ REAL PAPER ORDER CONTROL â€” "
     "Submitting this order sends an actual order "
     "to the connected Alpaca PAPER account."
 )
@@ -3558,9 +3422,9 @@ order_ready = (
 if not order_ready:
 
     st.warning(
-        "🔒 ORDER LOCKED\n\n"
+        "ðŸ”’ ORDER LOCKED\n\n"
         "Required:\n"
-        "BUY signal → selected option → approved risk check"
+        "BUY signal â†’ selected option â†’ approved risk check"
     )
 
 else:
@@ -3571,7 +3435,7 @@ else:
     )
 
     submit = st.button(
-        "🚀 SUBMIT PAPER ORDER",
+        "ðŸš€ SUBMIT PAPER ORDER",
         type="primary",
         disabled=not confirmation,
         use_container_width=True,
@@ -3594,13 +3458,13 @@ else:
             )
 
             st.success(
-                "🟢 Paper order submitted to Alpaca."
+                "ðŸŸ¢ Paper order submitted to Alpaca."
             )
 
         except Exception as exc:
 
             st.error(
-                f"❌ Order rejected: {exc}"
+                f"âŒ Order rejected: {exc}"
             )
 
 
@@ -3614,7 +3478,7 @@ if (
 ):
 
     st.subheader(
-        "📦 Latest Paper Order"
+        "ðŸ“¦ Latest Paper Order"
     )
 
     latest_order = (
@@ -3695,7 +3559,7 @@ st.markdown(
 
 st.divider()
 st.header(
-    "📋 Recent Alpaca Paper Orders",
+    "ðŸ“‹ Recent Alpaca Paper Orders",
     anchor=False,
 )
 
@@ -3709,7 +3573,7 @@ else:
     def order_timestamp(order, field):
         value = getattr(order, field, None)
         if value is None:
-            return "—"
+            return "â€”"
         try:
             return value.strftime("%Y-%m-%d %H:%M:%S %Z")
         except Exception:
@@ -3719,7 +3583,7 @@ else:
         try:
             return f"{float(value):.{decimals}f}"
         except Exception:
-            return "—"
+            return "â€”"
 
     sorted_orders = sorted(
         orders,
@@ -3740,7 +3604,7 @@ else:
 
         recent_order_rows.append(
             {
-                "Asset": symbol or "—",
+                "Asset": symbol or "â€”",
 
                 "Order Type": enum_text(
                     getattr(order, "order_type", "")
@@ -3771,7 +3635,7 @@ else:
                         "filled_avg_price",
                         None,
                     ) is not None
-                    else "—"
+                    else "â€”"
                 ),
 
                 "Status": enum_text(
@@ -3820,7 +3684,7 @@ st.markdown(
 st.divider()
 
 st.header(
-    "👁️ Position Manager",
+    "ðŸ‘ï¸ Position Manager",
     anchor=False,
 )
 
@@ -4036,7 +3900,7 @@ with tab_closed:
 # ============================================================
 
 st.subheader(
-    "🚨 Emergency Exit All Positions"
+    "ðŸš¨ Emergency Exit All Positions"
 )
 
 st.markdown(
@@ -4061,7 +3925,7 @@ emergency_confirm = st.checkbox(
 )
 
 if st.button(
-    "🚨 CLOSE ALL PAPER POSITIONS",
+    "ðŸš¨ CLOSE ALL PAPER POSITIONS",
     disabled=not emergency_confirm,
     use_container_width=True,
 ):
@@ -4101,7 +3965,7 @@ st.markdown(
 st.divider()
 
 st.header(
-    "📈 Performance Intelligence",
+    "ðŸ“ˆ Performance Intelligence",
     anchor=False,
 )
 
@@ -4217,7 +4081,7 @@ if pnl_column:
         )
 
         st.subheader(
-            "📊 Realized P&L Breakdown"
+            "ðŸ“Š Realized P&L Breakdown"
         )
 
         st.dataframe(
@@ -4227,7 +4091,7 @@ if pnl_column:
         )
 
         st.caption(
-            "🔒 Performance is calculated only from recorded trade-history data. "
+            "ðŸ”’ Performance is calculated only from recorded trade-history data. "
             "No simulated or fabricated results are included."
         )
 
@@ -4239,7 +4103,7 @@ if pnl_column:
 st.divider()
 
 st.header(
-    "🧠 Explainable AI",
+    "ðŸ§  Explainable AI",
     anchor=False,
 )
 
@@ -4324,13 +4188,13 @@ with s1:
     if trading_client:
 
         st.success(
-            "🟢 Alpaca Paper API"
+            "ðŸŸ¢ Alpaca Paper API"
         )
 
     else:
 
         st.error(
-            "🔴 Alpaca API unavailable"
+            "ðŸ”´ Alpaca API unavailable"
         )
 
 with s2:
@@ -4338,29 +4202,29 @@ with s2:
     if stock_client:
 
         st.success(
-            "🟢 SPY IEX Market Data"
+            "ðŸŸ¢ SPY IEX Market Data"
         )
 
     else:
 
         st.error(
-            "🔴 IEX unavailable"
+            "ðŸ”´ IEX unavailable"
         )
 
 with s3:
 
     st.success(
-        "🔒 PAPER ONLY"
+        "ðŸ”’ PAPER ONLY"
     )
 
 with s4:
 
     st.success(
-        "🔄 Auto Refresh Ready"
+        "ðŸ”„ Auto Refresh Ready"
     )
 
     if st.button(
-        "↻ Manual Refresh",
+        "â†» Manual Refresh",
         use_container_width=True,
         key="system_manual_refresh",
     ):
@@ -4387,7 +4251,7 @@ with s4:
         except Exception as exc:
 
             st.error(
-                f"❌ Refresh failed: {exc}"
+                f"âŒ Refresh failed: {exc}"
             )
 
 
@@ -4398,7 +4262,7 @@ with s4:
 st.divider()
 
 st.header(
-    "📊 Trading Overview",
+    "ðŸ“Š Trading Overview",
     anchor=False,
 )
 
@@ -4407,7 +4271,7 @@ a1, a2, a3, a4, a5 = st.columns(5)
 with a1:
 
     st.metric(
-        "💰 Equity",
+        "ðŸ’° Equity",
         money(
             equity
         ),
@@ -4418,14 +4282,14 @@ with a2:
     if day_pnl is None:
 
         st.metric(
-            "📅 Day P&L",
+            "ðŸ“… Day P&L",
             "N/A",
         )
 
     else:
 
         st.metric(
-            "📅 Day P&L",
+            "ðŸ“… Day P&L",
             money(
                 day_pnl
             ),
@@ -4434,7 +4298,7 @@ with a2:
 with a3:
 
     st.metric(
-        "💵 Cash",
+        "ðŸ’µ Cash",
         money(
             cash
         ),
@@ -4452,7 +4316,7 @@ with a4:
 with a5:
 
     st.metric(
-        "📂 Open Positions",
+        "ðŸ“‚ Open Positions",
         len(
             positions
         ),
@@ -4466,7 +4330,7 @@ with a5:
 st.divider()
 
 st.header(
-    "🧠 AI Thought Terminal",
+    "ðŸ§  AI Thought Terminal",
     anchor=False,
 )
 
@@ -4494,7 +4358,7 @@ with terminal_col1:
 with terminal_col2:
 
     clear_terminal = st.button(
-        "🧹 Clear Terminal",
+        "ðŸ§¹ Clear Terminal",
         use_container_width=True,
     )
 
@@ -4685,15 +4549,15 @@ st.markdown(
     """
 <div class="footer">
 
-    🚀 AlphaPilot AI
-    • Live Alpaca market data
-    • Explainable technical AI
-    • Options intelligence
-    • Risk governance
-    • Paper execution
-    • Position monitoring
-    • Realized performance tracking
-    • No fabricated results
+    ðŸš€ AlphaPilot AI
+    â€¢ Live Alpaca market data
+    â€¢ Explainable technical AI
+    â€¢ Options intelligence
+    â€¢ Risk governance
+    â€¢ Paper execution
+    â€¢ Position monitoring
+    â€¢ Realized performance tracking
+    â€¢ No fabricated results
 
 </div>
 """,

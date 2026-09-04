@@ -1,0 +1,73 @@
+def calculate_ai_decision(
+    market
+):
+
+    checks = {
+
+        "Price > SMA20":
+            market["price"]
+            > market["sma20"],
+
+        "SMA20 > SMA50":
+            market["sma20"]
+            > market["sma50"],
+
+        "RSI supportive":
+            50
+            <= market["rsi"]
+            <= 70,
+
+        "MACD bullish":
+            market["macd"]
+            > market["macd_signal"],
+
+        "Volume confirmation":
+            (
+                market["volume"]
+                >= market["volume_average"]
+            )
+            if market["volume_average"] > 0
+            else False,
+    }
+
+    passed = sum(
+        bool(v)
+        for v in checks.values()
+    )
+
+    total = len(checks)
+
+    confidence = (
+        passed
+        / total
+        * 100
+    )
+
+    signal = (
+        "BUY"
+        if confidence >= MIN_CONFIDENCE
+        else "NO TRADE"
+    )
+
+    return {
+
+        "signal": signal,
+
+        "confidence":
+            confidence,
+
+        "checks": checks,
+
+        "passed":
+            passed,
+
+        "total":
+            total,
+
+    }
+
+
+# ============================================================
+# OPTION QUOTE
+# ============================================================
+

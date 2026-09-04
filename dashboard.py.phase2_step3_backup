@@ -1125,170 +1125,91 @@ def fetch_market_data():
 def calculate_ai_decision(
     market
 ):
+
     # ========================================================
-    # SMART WEIGHTED TECHNICAL DECISION ENGINE
+    # WEIGHTED TECHNICAL DECISION ENGINE
     # ========================================================
 
-    price = float(market.get("price", 0) or 0)
-    sma20 = float(market.get("sma20", 0) or 0)
-    sma50 = float(market.get("sma50", 0) or 0)
-    rsi = float(market.get("rsi", 50) or 50)
-    macd = float(market.get("macd", 0) or 0)
-    macd_signal = float(market.get("macd_signal", 0) or 0)
-    volume = float(market.get("volume", 0) or 0)
-    volume_average = float(market.get("volume_average", 0) or 0)
+    checks = {
 
-    # --------------------------------------------------------
-    # BULLISH CONDITIONS
-    # --------------------------------------------------------
-
-    bullish_checks = {
         "Price > SMA20":
-            price > sma20,
+            market["price"] > market["sma20"],
 
         "SMA20 > SMA50":
-            sma20 > sma50,
+            market["sma20"] > market["sma50"],
 
         "RSI supportive":
-            50 <= rsi <= 68,
+            50 <= market["rsi"] <= 70,
 
         "MACD bullish":
-            macd > macd_signal,
+            market["macd"] > market["macd_signal"],
 
         "Volume confirmation":
-            volume >= volume_average
-            if volume_average > 0
+            (
+                market["volume"] >= market["volume_average"]
+            )
+            if market["volume_average"] > 0
             else False,
     }
 
-    bullish_weights = {
+    # Trend gets the highest weight.
+    # Momentum confirmation gets medium weight.
+    # Volume provides additional confirmation.
+    weights = {
+
         "Price > SMA20": 25,
+
         "SMA20 > SMA50": 25,
+
         "RSI supportive": 15,
+
         "MACD bullish": 20,
+
         "Volume confirmation": 15,
     }
 
-    bullish_confidence = sum(
-        bullish_weights[name]
-        for name, passed_check in bullish_checks.items()
+    confidence = sum(
+        weights[name]
+        for name, passed_check in checks.items()
         if passed_check
     )
 
-    # --------------------------------------------------------
-    # BEARISH CONDITIONS
-    # --------------------------------------------------------
-
-    bearish_checks = {
-        "Price < SMA20":
-            price < sma20,
-
-        "SMA20 < SMA50":
-            sma20 < sma50,
-
-        "RSI weak":
-            30 <= rsi <= 50,
-
-        "MACD bearish":
-            macd < macd_signal,
-
-        "Volume confirmation":
-            volume >= volume_average
-            if volume_average > 0
-            else False,
-    }
-
-    bearish_weights = {
-        "Price < SMA20": 25,
-        "SMA20 < SMA50": 25,
-        "RSI weak": 15,
-        "MACD bearish": 20,
-        "Volume confirmation": 15,
-    }
-
-    bearish_confidence = sum(
-        bearish_weights[name]
-        for name, passed_check in bearish_checks.items()
-        if passed_check
-    )
-
-    bullish_passed = sum(
+    passed = sum(
         bool(value)
-        for value in bullish_checks.values()
+        for value in checks.values()
     )
-
-    bearish_passed = sum(
-        bool(value)
-        for value in bearish_checks.values()
-    )
-
-    # --------------------------------------------------------
-    # SMART SIGNAL SELECTION
-    # --------------------------------------------------------
-
-    signal = "NO TRADE"
-    confidence = max(
-        bullish_confidence,
-        bearish_confidence,
-    )
-
-    checks = bullish_checks
-    passed = bullish_passed
-
-    # BUY requires:
-    # - minimum configured confidence
-    # - bullish trend structure
-    # - at least 3 bullish conditions
-    #
-    # SELL is informational for now because the current
-    # execution engine is Long Call / BUY only.
-
-    if (
-        bullish_confidence >= MIN_CONFIDENCE
-        and bullish_passed >= 3
-        and price > sma20
-        and sma20 > sma50
-    ):
-        signal = "BUY"
-        confidence = bullish_confidence
-        checks = bullish_checks
-        passed = bullish_passed
-
-    elif (
-        bearish_confidence >= MIN_CONFIDENCE
-        and bearish_passed >= 3
-        and price < sma20
-        and sma20 < sma50
-    ):
-        signal = "SELL"
-        confidence = bearish_confidence
-        checks = bearish_checks
-        passed = bearish_passed
-
-    else:
-        signal = "NO TRADE"
-
-        if bullish_confidence >= bearish_confidence:
-            confidence = bullish_confidence
-            checks = bullish_checks
-            passed = bullish_passed
-        else:
-            confidence = bearish_confidence
-            checks = bearish_checks
-            passed = bearish_passed
 
     total = len(checks)
 
+    # ========================================================
+    # SIGNAL
+    # ========================================================
+
+    if confidence >= MIN_CONFIDENCE:
+
+        signal = "BUY"
+
+    else:
+
+        signal = "NO TRADE"
+
     return {
-        "signal": signal,
-        "confidence": float(confidence),
-        "checks": checks,
-        "passed": passed,
-        "total": total,
-        "bullish_confidence": float(bullish_confidence),
-        "bearish_confidence": float(bearish_confidence),
-        "bullish_passed": bullish_passed,
-        "bearish_passed": bearish_passed,
+
+        "signal":
+            signal,
+
+        "confidence":
+            float(confidence),
+
+        "checks":
+            checks,
+
+        "passed":
+            passed,
+
+        "total":
+            total,
+
     }
 
 
@@ -1862,18 +1783,7 @@ def run_risk_check():
         )
     )
 
-    # Risk-sized quantity: never exceed either account-risk or exposure limit.
-    # Also respect the configured default contract quantity as a ceiling.
-    quantity = min(
-        DEFAULT_CONTRACT_QTY,
-        max_quantity,
-    )
-
-    estimated_cost = (
-        option_price
-        * 100
-        * quantity
-    )
+    quantity = DEFAULT_CONTRACT_QTY
 
     estimated_cost = (
         option_price
@@ -2870,7 +2780,7 @@ if scan_contracts:
             st.session_state.risk_result = None
 
             st.warning(
-                " Options scan blocked — "
+                "🟡 Options scan blocked — "
                 "current AI signal is NO TRADE."
             )
 
@@ -2922,13 +2832,8 @@ if run_risk:
             else:
                 st.warning("⚠️ Market data unavailable to calculate AI decision.")
 
-        # Step 3: Option selection is allowed only after a BUY signal.
-        if st.session_state.ai_decision.get("signal") != "BUY":
-            st.session_state.selected_option = None
-            st.session_state.option_candidates = []
-            st.session_state.risk_result = None
-            st.error("Risk Check blocked: AI signal is NO TRADE.")
-        elif st.session_state.get("selected_option") is None:
+        # Step 3: Ensure an Option is selected for Risk Calculation
+        if st.session_state.get("selected_option") is None:
             best_opt, candidates = scan_options(st.session_state.market_data)
             st.session_state.selected_option = best_opt
             st.session_state.option_candidates = candidates
@@ -4313,7 +4218,7 @@ st.markdown(
 st.divider()
 
 st.header(
-    "âš¡ System Status",
+    "⚡ System Status",
     anchor=False,
 )
 
@@ -4443,7 +4348,7 @@ with a3:
 with a4:
 
     st.metric(
-        "âš¡ Buying Power",
+        "⚡ Buying Power",
         money(
             buying_power
         ),
@@ -4652,7 +4557,7 @@ else:
     )
 
     if st.button(
-        "â†© Restore Live Terminal"
+        "↩ Restore Live Terminal"
     ):
 
         st.session_state.terminal_cleared = False
